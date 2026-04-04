@@ -1,199 +1,192 @@
 'use client';
 
-import React, { createContext, useContext, useReducer, useEffect, useCallback } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import {
-  HelpRequest, Volunteer, Resource, RequestCategory,
-  MOCK_REQUESTS, MOCK_VOLUNTEERS, MOCK_RESOURCES,
-} from './mockData';
-import { computePriority, findDuplicate, calculateResources } from './aiLogic';
+  assignVolunteer,
+  completeRequest,
+  createRequest as createRequestApi,
+  getDashboard,
+  updatePriority,
+} from './api';
+import { DashboardData, FALLBACK_DASHBOARD, HelpRequest } from './mockData';
 
-export interface AppState {
-  requests: HelpRequest[];
-  volunteers: Volunteer[];
-  resources: Resource[];
-  alerts: string[];
+export type UserRole = 'citizen' | 'volunteer' | 'government' | null;
+
+export interface SessionUser {
+  role: UserRole;
+  name: string;
+  phone: string;
+  location?: string;
+}
+
+interface CreatePayload {
+  name: string;
+  phone: string;
+  category: 'food' | 'medical' | 'rescue' | 'shelter';
+  people: number;
+  location: string;
+  zone: string;
+}
+
+interface AppState {
+  dashboard: DashboardData;
+  loading: boolean;
+  error: string;
   isOnline: boolean;
-  pendingSync: HelpRequest[];
+  pendingQueue: CreatePayload[];
+  user: SessionUser;
 }
-
-type Action =
-  | { type: 'CREATE_REQUEST'; payload: Omit<HelpRequest, 'id' | 'priority' | 'createdAt'> & { createdAt?: string } }
-  | { type: 'ASSIGN_VOLUNTEER'; requestId: string; volunteerId: string }
-  | { type: 'UPDATE_STATUS'; requestId: string; status: HelpRequest['status'] }
-  | { type: 'BROADCAST_ALERT'; message: string }
-  | { type: 'TOGGLE_ONLINE'; value: boolean }
-  | { type: 'SYNC_PENDING' }
-  | { type: 'SET_VOLUNTEER_STATUS'; volunteerId: string; status: Volunteer['status'] };
-
-let reqCounter = MOCK_REQUESTS.length + 1;
-
-function reducer(state: AppState, action: Action): AppState {
-  switch (action.type) {
-    case 'CREATE_REQUEST': {
-      const { category, familySize, location, phone } = action.payload;
-
-      // Duplicate detection
-      const dup = findDuplicate({ location, category, phone }, state.requests);
-      if (dup) {
-        // Merge: increase family size on existing
-        return {
-          ...state,
-          requests: state.requests.map((r) =>
-            r.id === dup.id
-              ? { ...r, familySize: r.familySize + familySize, isDuplicate: true }
-              : r,
-          ),
-        };
-      }
-
-      const id = `REQ-${String(reqCounter++).padStart(4, '0')}`;
-      const createdAt = action.payload.createdAt ?? new Date().toISOString();
-      const priority = computePriority(category, familySize, createdAt);
-      const resourcesNeeded = calculateResources(category, familySize);
-
-      const newReq: HelpRequest = {
-        ...action.payload,
-        id,
-        createdAt,
-        priority,
-        resourcesNeeded,
-      };
-
-      if (!state.isOnline) {
-        return { ...state, pendingSync: [...state.pendingSync, newReq] };
-      }
-      return { ...state, requests: [newReq, ...state.requests] };
-    }
-
-    case 'ASSIGN_VOLUNTEER': {
-      const volunteer = state.volunteers.find((v) => v.id === action.volunteerId);
-      return {
-        ...state,
-        requests: state.requests.map((r) =>
-          r.id === action.requestId
-            ? {
-                ...r,
-                status: 'assigned',
-                assignedVolunteerId: action.volunteerId,
-                assignedVolunteerName: volunteer?.name,
-                eta: `${Math.floor(Math.random() * 60) + 15} mins`,
-              }
-            : r,
-        ),
-        volunteers: state.volunteers.map((v) =>
-          v.id === action.volunteerId ? { ...v, status: 'busy' } : v,
-        ),
-      };
-    }
-
-    case 'UPDATE_STATUS': {
-      return {
-        ...state,
-        requests: state.requests.map((r) =>
-          r.id === action.requestId ? { ...r, status: action.status } : r,
-        ),
-        volunteers: action.status === 'completed'
-          ? state.volunteers.map((v) => {
-              const req = state.requests.find((r) => r.id === action.requestId);
-              return req?.assignedVolunteerId === v.id
-                ? { ...v, status: 'available', tasksCompleted: v.tasksCompleted + 1 }
-                : v;
-            })
-          : state.volunteers,
-      };
-    }
-
-    case 'BROADCAST_ALERT':
-      return { ...state, alerts: [action.message, ...state.alerts].slice(0, 20) };
-
-    case 'TOGGLE_ONLINE':
-      return { ...state, isOnline: action.value };
-
-    case 'SYNC_PENDING':
-      return {
-        ...state,
-        requests: [...state.pendingSync, ...state.requests],
-        pendingSync: [],
-      };
-
-    case 'SET_VOLUNTEER_STATUS':
-      return {
-        ...state,
-        volunteers: state.volunteers.map((v) =>
-          v.id === action.volunteerId ? { ...v, status: action.status } : v,
-        ),
-      };
-
-    default:
-      return state;
-  }
-}
-
-const initialState: AppState = {
-  requests: MOCK_REQUESTS,
-  volunteers: MOCK_VOLUNTEERS,
-  resources: MOCK_RESOURCES,
-  alerts: ['🚨 FLOOD ALERT: Maximum rainfall recorded in Kancheepuram district', '⚠️ All volunteers report to designated assembly points immediately'],
-  isOnline: true,
-  pendingSync: [],
-};
 
 interface AppContextValue {
   state: AppState;
-  dispatch: React.Dispatch<Action>;
-  createRequest: (data: Omit<HelpRequest, 'id' | 'priority' | 'createdAt' | 'resourcesNeeded'>) => string;
-  assignVolunteer: (requestId: string, volunteerId: string) => void;
-  updateStatus: (requestId: string, status: HelpRequest['status']) => void;
+  login: (user: SessionUser) => void;
+  logout: () => void;
+  refreshDashboard: () => Promise<void>;
+  createRequest: (payload: CreatePayload) => Promise<HelpRequest | null>;
+  assignRequest: (requestId: string, volunteerId: string) => Promise<void>;
+  completeRequestById: (requestId: string) => Promise<void>;
+  changePriority: (requestId: string, priority: number) => Promise<void>;
   broadcastAlert: (message: string) => void;
   toggleOnline: (value: boolean) => void;
-  syncPending: () => void;
+  syncPending: () => Promise<void>;
 }
+
+const OFFLINE_KEY = 'sahayaknet_offline_queue';
+const USER_KEY = 'sahayaknet_user';
 
 const AppContext = createContext<AppContextValue | null>(null);
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
-  const [state, dispatch] = useReducer(reducer, initialState);
+  const [dashboard, setDashboard] = useState<DashboardData>(FALLBACK_DASHBOARD);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [isOnline, setIsOnline] = useState(true);
+  const [pendingQueue, setPendingQueue] = useState<CreatePayload[]>([]);
+  const [user, setUser] = useState<SessionUser>({ role: null, name: '', phone: '' });
 
-  // Persist pending to localStorage
-  useEffect(() => {
-    if (state.pendingSync.length > 0) {
-      localStorage.setItem('sahayaknet_pending', JSON.stringify(state.pendingSync));
+  const refreshDashboard = useCallback(async () => {
+    try {
+      setLoading(true);
+      const data = await getDashboard();
+      setDashboard(data);
+      setError('');
+    } catch (err) {
+      setError((err as Error).message || 'Unable to connect backend');
+    } finally {
+      setLoading(false);
     }
-  }, [state.pendingSync]);
+  }, []);
+
+  useEffect(() => {
+    const queued = localStorage.getItem(OFFLINE_KEY);
+    if (queued) {
+      setPendingQueue(JSON.parse(queued));
+    }
+    const savedUser = localStorage.getItem(USER_KEY);
+    if (savedUser) {
+      setUser(JSON.parse(savedUser));
+    }
+    refreshDashboard();
+  }, [refreshDashboard]);
+
+  useEffect(() => {
+    localStorage.setItem(OFFLINE_KEY, JSON.stringify(pendingQueue));
+  }, [pendingQueue]);
+
+  useEffect(() => {
+    localStorage.setItem(USER_KEY, JSON.stringify(user));
+  }, [user]);
 
   const createRequest = useCallback(
-    (data: Omit<HelpRequest, 'id' | 'priority' | 'createdAt' | 'resourcesNeeded'>): string => {
-      const tempId = `REQ-${String(reqCounter).padStart(4, '0')}`;
-      dispatch({ type: 'CREATE_REQUEST', payload: data });
-      return tempId;
+    async (payload: CreatePayload) => {
+      if (!isOnline) {
+        setPendingQueue((prev) => [payload, ...prev]);
+        return null;
+      }
+      const req = await createRequestApi(payload);
+      await refreshDashboard();
+      return req;
     },
-    [],
+    [isOnline, refreshDashboard],
   );
 
-  const assignVolunteer = useCallback((requestId: string, volunteerId: string) => {
-    dispatch({ type: 'ASSIGN_VOLUNTEER', requestId, volunteerId });
-  }, []);
+  const assignRequest = useCallback(
+    async (requestId: string, volunteerId: string) => {
+      await assignVolunteer({ request_id: requestId, volunteer_id: volunteerId });
+      await refreshDashboard();
+    },
+    [refreshDashboard],
+  );
 
-  const updateStatus = useCallback((requestId: string, status: HelpRequest['status']) => {
-    dispatch({ type: 'UPDATE_STATUS', requestId, status });
-  }, []);
+  const completeRequestById = useCallback(
+    async (requestId: string) => {
+      await completeRequest({ request_id: requestId });
+      await refreshDashboard();
+    },
+    [refreshDashboard],
+  );
+
+  const changePriority = useCallback(
+    async (requestId: string, priority: number) => {
+      await updatePriority({ request_id: requestId, priority });
+      await refreshDashboard();
+    },
+    [refreshDashboard],
+  );
+
+  const syncPending = useCallback(async () => {
+    if (!isOnline || pendingQueue.length === 0) return;
+    for (const item of pendingQueue) {
+      await createRequestApi(item);
+    }
+    setPendingQueue([]);
+    await refreshDashboard();
+  }, [isOnline, pendingQueue, refreshDashboard]);
 
   const broadcastAlert = useCallback((message: string) => {
-    dispatch({ type: 'BROADCAST_ALERT', message });
+    if (!message.trim()) return;
+    setDashboard((prev) => ({
+      ...prev,
+      alerts: [message.trim(), ...prev.alerts].slice(0, 15),
+    }));
   }, []);
 
-  const toggleOnline = useCallback((value: boolean) => {
-    dispatch({ type: 'TOGGLE_ONLINE', value });
+  const login = useCallback((nextUser: SessionUser) => {
+    setUser(nextUser);
   }, []);
 
-  const syncPending = useCallback(() => {
-    dispatch({ type: 'SYNC_PENDING' });
-    localStorage.removeItem('sahayaknet_pending');
+  const logout = useCallback(() => {
+    setUser({ role: null, name: '', phone: '' });
+    localStorage.removeItem(USER_KEY);
   }, []);
+
+  const state = useMemo(
+    () => ({
+      dashboard,
+      loading,
+      error,
+      isOnline,
+      pendingQueue,
+      user,
+    }),
+    [dashboard, loading, error, isOnline, pendingQueue, user],
+  );
 
   return (
     <AppContext.Provider
-      value={{ state, dispatch, createRequest, assignVolunteer, updateStatus, broadcastAlert, toggleOnline, syncPending }}
+      value={{
+        state,
+        login,
+        logout,
+        refreshDashboard,
+        createRequest,
+        assignRequest,
+        completeRequestById,
+        changePriority,
+        broadcastAlert,
+        toggleOnline: setIsOnline,
+        syncPending,
+      }}
     >
       {children}
     </AppContext.Provider>
@@ -202,6 +195,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
 export function useApp(): AppContextValue {
   const ctx = useContext(AppContext);
-  if (!ctx) throw new Error('useApp must be used within AppProvider');
+  if (!ctx) throw new Error('useApp must be used inside AppProvider');
   return ctx;
 }

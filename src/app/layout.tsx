@@ -7,8 +7,8 @@ import Navbar from '@/components/Navbar';
 const inter = Inter({ subsets: ['latin'] });
 
 export const metadata: Metadata = {
-  title: 'SahayakNet – Disaster Coordination System | NDMA',
-  description: 'Multi-Channel AI Disaster Coordination System – Connecting Citizens, Volunteers, NGOs and Government',
+  title: 'SahayakNet | NDMA Disaster Coordination',
+  description: 'Government-style AI Disaster Coordination Platform',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
@@ -17,8 +17,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <head>
         <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
       </head>
-      <body className={inter.className} style={{ backgroundColor: '#f0f4f8' }}>
+      <body className={inter.className}>
         <AppProvider>
+          <div className="gov-top-strip">Government of India | Ministry of Home Affairs | NDMA</div>
           <Navbar />
           <main className="min-h-screen">{children}</main>
         </AppProvider>
