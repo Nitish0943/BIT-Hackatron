@@ -10,6 +10,10 @@ const CATEGORIES = [
   { id: 'medical', label: '💊 Medical', tone: 'bg-red-50 border-red-200 text-red-700' },
   { id: 'rescue', label: '🚑 Rescue', tone: 'bg-amber-50 border-amber-200 text-amber-700' },
   { id: 'shelter', label: '🏠 Shelter', tone: 'bg-blue-50 border-blue-200 text-blue-700' },
+  { id: 'baby_care', label: '🍼 Baby Care', tone: 'bg-pink-50 border-pink-200 text-pink-700' },
+  { id: 'women_care', label: '🩷 Women Care', tone: 'bg-rose-50 border-rose-200 text-rose-700' },
+  { id: 'water', label: '💧 Water', tone: 'bg-cyan-50 border-cyan-200 text-cyan-700' },
+  { id: 'emergency_help', label: '⚠️ Emergency', tone: 'bg-slate-50 border-slate-200 text-slate-700' },
 ] as const;
 
 function sourceLabel(source?: 'web' | 'ivr' | 'whatsapp' | 'missed_call' | 'drone') {
@@ -18,7 +22,7 @@ function sourceLabel(source?: 'web' | 'ivr' | 'whatsapp' | 'missed_call' | 'dron
 
 function RequestHelpContent() {
   const params = useSearchParams();
-  const initialCategory = (params?.get('category') as 'food' | 'medical' | 'rescue' | 'shelter' | null) ?? 'food';
+  const initialCategory = (params?.get('category') as 'food' | 'medical' | 'rescue' | 'shelter' | 'baby_care' | 'women_care' | 'water' | 'emergency_help' | null) ?? 'food';
   const router = useRouter();
   const { state, createRequest, toggleOnline } = useApp();
 
@@ -96,7 +100,7 @@ function RequestHelpContent() {
     <div className="max-w-3xl mx-auto px-4 py-8 space-y-4">
       <div className="rounded-2xl border border-slate-200 shadow-sm bg-white p-5">
         <h1 className="text-3xl font-black text-[#0b3c5d]">Emergency Help Request</h1>
-        <p className="text-slate-600 mt-1">Simple 4-step emergency request flow.</p>
+          <p className="text-slate-600 mt-1">Simple emergency request flow for every household need.</p>
 
         <div className="flex items-center gap-2 mt-3">
           <span className="text-xs text-slate-500">Online Sync</span>
@@ -112,7 +116,7 @@ function RequestHelpContent() {
       <div className="rounded-2xl border border-slate-200 shadow-sm bg-white p-5 space-y-4">
         <div>
           <div className="text-lg font-black text-[#0b3c5d]">Step 1: Select Help Type</div>
-          <div className="grid grid-cols-2 gap-3 mt-3">
+          <div className="grid grid-cols-2 gap-3 mt-3 md:grid-cols-4">
           {CATEGORIES.map((c) => (
             <button
               key={c.id}
@@ -160,7 +164,7 @@ function RequestHelpContent() {
         <div>
           <div className="text-lg font-black text-[#0b3c5d]">Step 3: Preview</div>
           <div className="mt-2 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-base text-slate-700">
-            You requested <strong>{category.toUpperCase()}</strong> for <strong>{people}</strong> people.
+            You requested <strong>{category.replaceAll('_', ' ').toUpperCase()}</strong> for <strong>{people}</strong> people.
           </div>
         </div>
 

@@ -4,12 +4,28 @@ import { useEffect, useState } from 'react';
 import { HelpRequest } from '@/lib/mockData';
 import { Clock, MapPin, Route, User } from 'lucide-react';
 import { explainPriority, mergeMessage, priorityLabel, resourceEstimate } from '@/lib/aiLogic';
+import MissionTimeline from './MissionTimeline';
 
 const CAT_COLORS: Record<string, string> = {
   medical: '#c62828',
   rescue: '#f9a825',
   food: '#2e7d32',
   shelter: '#0b3c5d',
+  baby_care: '#d81b60',
+  women_care: '#ad1457',
+  water: '#0288d1',
+  emergency_help: '#374151',
+};
+
+const CAT_LABELS: Record<string, string> = {
+  medical: 'Medical',
+  rescue: 'Rescue',
+  food: 'Food',
+  shelter: 'Shelter',
+  baby_care: 'Baby Care',
+  women_care: 'Women Care',
+  water: 'Water',
+  emergency_help: 'Emergency Help',
 };
 
 interface Props {
@@ -64,6 +80,7 @@ export default function RequestCard({ request, onAssign, assigning = false, comp
             </div>
             <div className="mt-2 text-xs text-gray-500 truncate flex items-center gap-1"><MapPin size={12} />{request.location}</div>
             <div className="mt-2 flex flex-wrap items-center gap-2">
+              <span className="text-[11px] bg-slate-100 text-slate-700 px-2 py-0.5 rounded-full">{CAT_LABELS[request.category] || request.category}</span>
               <span className="text-[11px] bg-slate-100 text-slate-700 px-2 py-0.5 rounded-full">Zone: {request.zone}</span>
               <span className="text-[11px] bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full">Source: {source}</span>
               <span className="text-[11px] bg-amber-50 text-amber-700 px-2 py-0.5 rounded-full">Priority: {urgency}</span>
@@ -73,6 +90,15 @@ export default function RequestCard({ request, onAssign, assigning = false, comp
               <div className="flex items-start gap-1.5"><Route size={12} className="mt-0.5" /><span>{request.priorityReason || explainPriority(request)}</span></div>
               <div className="text-slate-500">{request.resourceSummary || resourceEstimate(request)}</div>
               {mergeNote && <div className="text-green-700 font-medium">{mergeNote}</div>}
+            </div>
+            <div className="mt-3 border-t border-slate-100 pt-2">
+              <MissionTimeline
+                requestId={request.id}
+                createdAt={request.createdAt}
+                status={request.status}
+                executionStatus={request.executionStatus}
+                compact
+              />
             </div>
           </>
         )}

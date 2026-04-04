@@ -1,15 +1,17 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 from math import ceil
 from typing import Any, Literal, Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, Response
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 
-RequestCategory = Literal["food", "medical", "rescue", "shelter"]
+RequestCategory = Literal["food", "medical", "rescue", "shelter", "baby_care", "women_care", "water", "emergency_help"]
 RequestStatus = Literal["pending", "assigned", "completed"]
 RequestSource = Literal["web", "ivr", "whatsapp", "missed_call", "drone"]
 VolunteerAvailability = Literal["available", "busy", "inactive"]
@@ -34,6 +36,10 @@ class AssignIn(BaseModel):
 
 class CompleteIn(BaseModel):
     request_id: str
+
+class MissionStartIn(BaseModel):
+    request_id: str
+    volunteer_id: str
 
 
 class PriorityIn(BaseModel):
@@ -96,6 +102,8 @@ class AlertIn(BaseModel):
 
 app = FastAPI(title="SahayakNet Backend", version="1.1.0")
 
+app.add_middleware(GZipMiddleware, minimum_size=500)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000"],
@@ -111,7 +119,7 @@ ZONE_COORDS: dict[str, tuple[float, float]] = {
     "Jamshedpur": (22.8046, 86.2029),
 }
 
-CATEGORIES: list[RequestCategory] = ["food", "medical", "rescue", "shelter"]
+CATEGORIES: list[RequestCategory] = ["food", "medical", "rescue", "shelter", "baby_care", "women_care", "water", "emergency_help"]
 
 requests: list[dict[str, Any]] = []
 volunteers: list[dict[str, Any]] = []
@@ -122,6 +130,11 @@ camps: list[dict[str, Any]] = []
 request_counter = 1
 volunteer_counter = 1
 mission_counter = 1
+dashboard_cache_full: dict[str, Any] = {}
+dashboard_cache_compact: dict[str, Any] = {}
+dashboard_cache_updated_at = ""
+duplicate_request_index: dict[str, str] = {}
+cache_refresh_task: asyncio.Task[None] | None = None
 
 
 def now_iso() -> str:
@@ -132,8 +145,21 @@ def normalize_location(value: str) -> str:
     return " ".join(value.strip().lower().split())
 
 
+def duplicate_key(category: RequestCategory, location: str) -> str:
+    return f"{category}|{normalize_location(location)}"
+
+
 def compute_priority(category: RequestCategory, family_size: int, created_at: str) -> int:
-    severity_map = {"medical": 55, "rescue": 50, "food": 35, "shelter": 25}
+    severity_map = {
+        "medical": 60,
+        "emergency_help": 58,
+        "rescue": 55,
+        "baby_care": 52,
+        "women_care": 50,
+        "water": 42,
+        "food": 35,
+        "shelter": 25,
+    }
     waiting_hours = max(0, int((datetime.now(timezone.utc) - datetime.fromisoformat(created_at)).total_seconds() // 3600))
     waiting_score = min(waiting_hours * 2, 30)
     return severity_map[category] + family_size + waiting_score
@@ -141,30 +167,63 @@ def compute_priority(category: RequestCategory, family_size: int, created_at: st
 
 def calculate_resources(category: RequestCategory, family_size: int) -> dict[str, int]:
     return {
-        "food_packets": family_size * 3,
-        "water_liters": family_size * 5,
-        "medicine_kits": ceil(family_size / 2) if category == "medical" else 0,
+        "food_packets": family_size * 3 if category in {"food", "emergency_help"} else (family_size * 2 if category == "shelter" else 0),
+        "water_liters": family_size * 5 if category in {"food", "water", "baby_care", "women_care", "emergency_help"} else 0,
+        "water_supply": family_size * 5 if category in {"food", "water", "baby_care", "women_care", "emergency_help"} else 0,
+        "medicine_kits": ceil(family_size / 2) if category == "medical" else (1 if category == "emergency_help" else 0),
         "shelter_units": ceil(family_size / 4) if category == "shelter" else 0,
+        "baby_care_kits": ceil(family_size / 2) if category == "baby_care" else 0,
+        "women_care_kits": ceil(family_size / 2) if category == "women_care" else 0,
         "rescue_boats": 1 if category == "rescue" else 0,
+        "emergency_essentials": max(1, ceil(family_size / 2)) if category in {"rescue", "emergency_help"} else 0,
     }
 
 
 def priority_reason(category: RequestCategory, family_size: int) -> str:
-    if category == "medical":
-        base = "injury"
-    elif category == "rescue":
-        base = "rescue need"
-    elif category == "shelter":
-        base = "shelter shortage"
-    else:
-        base = "food shortage"
+    reason_map = {
+        "medical": "medical emergency",
+        "rescue": "rescue need",
+        "shelter": "shelter shortage",
+        "baby_care": "infant support need",
+        "women_care": "women care shortage",
+        "water": "water shortage",
+        "emergency_help": "critical emergency",
+        "food": "food shortage",
+    }
+    base = reason_map[category]
     return f"High priority due to {base} + {family_size} member{'s' if family_size > 1 else ''}."
 
 
+def resource_summary(category: RequestCategory, family_size: int) -> str:
+    if category == "medical":
+        return f"Medicine kits needed: {max(1, ceil(family_size / 2))} units"
+    if category == "rescue":
+        return f"Rescue support needed for {family_size} people"
+    if category == "shelter":
+        return f"Shelter units needed: {max(1, ceil(family_size / 4))}"
+    if category == "baby_care":
+        return f"Baby care kits needed: {max(1, ceil(family_size / 2))} units"
+    if category == "women_care":
+        return f"Women care kits needed: {max(1, ceil(family_size / 2))} units"
+    if category == "water":
+        return f"Water supply needed: {family_size * 5} liters"
+    if category == "emergency_help":
+        return f"Emergency essentials needed for {family_size} people"
+    return f"Food needed: {family_size * 2} units"
+
+
 def detect_duplicate(category: RequestCategory, location: str) -> dict[str, Any] | None:
+    idx_key = duplicate_key(category, location)
+    existing_id = duplicate_request_index.get(idx_key)
+    if existing_id:
+        existing = find_request(existing_id)
+        if existing and existing.get("status") != "completed":
+            return existing
+
     payload_location = normalize_location(location)
     for existing in requests:
         if existing["category"] == category and normalize_location(existing["location"]) == payload_location and existing["status"] != "completed":
+            duplicate_request_index[idx_key] = existing["id"]
             return existing
     return None
 
@@ -207,7 +266,8 @@ def build_request(
         duplicate["duplicateOf"] = duplicate["id"]
         duplicate["mergedCount"] = duplicate.get("mergedCount", 1) + 1
         duplicate["priorityReason"] = priority_reason(category, duplicate["family_size"])
-        duplicate["resourceSummary"] = f"Food needed: {duplicate['family_size'] * 2} units"
+        duplicate["resourceSummary"] = resource_summary(category, duplicate["family_size"])
+        duplicate_request_index[duplicate_key(category, location)] = duplicate["id"]
         return duplicate
 
     request_id = f"REQ-{request_counter:04}"
@@ -229,11 +289,7 @@ def build_request(
         "source": source,
         "sourceLabel": source.replace("_", " ").title(),
         "resourcesNeeded": calculate_resources(category, family_size),
-        "resourceSummary": f"Food needed: {family_size * 2} units" if category == "food" else (
-            f"Medicine kits needed: {max(1, ceil(family_size / 2))} units" if category == "medical" else (
-                f"Rescue support needed for {family_size} people" if category == "rescue" else f"Shelter units needed: {max(1, ceil(family_size / 4))}"
-            )
-        ),
+        "resourceSummary": resource_summary(category, family_size),
         "priorityReason": priority_reason(category, family_size),
         "mergedCount": 1,
         "assignedVolunteerId": None,
@@ -241,6 +297,7 @@ def build_request(
         "eta": None,
     }
     requests.insert(0, request)
+    duplicate_request_index[duplicate_key(category, location)] = request_id
     return request
 
 
@@ -250,6 +307,140 @@ def find_request(request_id: str) -> dict[str, Any] | None:
 
 def find_volunteer(volunteer_id: str) -> dict[str, Any] | None:
     return next((item for item in volunteers if item["id"] == volunteer_id), None)
+
+
+def compact_request(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": item.get("id"),
+        "name": item.get("name"),
+        "phone": item.get("phone"),
+        "category": item.get("category"),
+        "people": item.get("people"),
+        "family_size": item.get("family_size"),
+        "location": item.get("location"),
+        "zone": item.get("zone"),
+        "lat": item.get("lat"),
+        "lng": item.get("lng"),
+        "priority": item.get("priority"),
+        "createdAt": item.get("createdAt"),
+        "status": item.get("status"),
+        "executionStatus": item.get("executionStatus"),
+        "source": item.get("source"),
+        "sourceLabel": item.get("sourceLabel"),
+        "resourcesNeeded": item.get("resourcesNeeded"),
+        "resourceSummary": item.get("resourceSummary"),
+        "priorityReason": item.get("priorityReason"),
+        "mergedCount": item.get("mergedCount"),
+        "assignedVolunteerId": item.get("assignedVolunteerId"),
+        "assignedVolunteerName": item.get("assignedVolunteerName"),
+        "eta": item.get("eta"),
+    }
+
+
+def compact_volunteer(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": item.get("id"),
+        "name": item.get("name"),
+        "phone": item.get("phone"),
+        "skills": item.get("skills"),
+        "vehicle": item.get("vehicle"),
+        "availability": item.get("availability"),
+        "zone": item.get("zone"),
+        "image": item.get("image"),
+        "idCard": item.get("idCard"),
+        "age": item.get("age"),
+        "lat": item.get("lat"),
+        "lng": item.get("lng"),
+        "tasksCompleted": item.get("tasksCompleted"),
+    }
+
+
+def compact_resource(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "name": item.get("name"),
+        "total": item.get("total"),
+        "available": item.get("available"),
+        "unit": item.get("unit"),
+        "dailyConsumption": item.get("dailyConsumption"),
+    }
+
+
+def build_dashboard_payload(compact: bool) -> dict[str, Any]:
+    if compact:
+        return {
+            "summary": update_summary(),
+            "resources": [compact_resource(item) for item in resources],
+            "alerts": alerts[:20],
+            "volunteers": [compact_volunteer(item) for item in volunteers],
+            "requests": [compact_request(item) for item in requests],
+            "missions": missions[-120:],
+            "camps": camps,
+            "updatedAt": dashboard_cache_updated_at,
+            "lastUpdated": dashboard_cache_updated_at,
+        }
+
+    return {
+        "summary": update_summary(),
+        "resources": resources,
+        "alerts": alerts,
+        "volunteers": volunteers,
+        "requests": requests,
+        "missions": missions,
+        "camps": camps,
+        "updatedAt": dashboard_cache_updated_at,
+        "lastUpdated": dashboard_cache_updated_at,
+    }
+
+
+def refresh_dashboard_cache() -> None:
+    global dashboard_cache_full, dashboard_cache_compact, dashboard_cache_updated_at
+    dashboard_cache_updated_at = now_iso()
+    dashboard_cache_full = build_dashboard_payload(compact=False)
+    dashboard_cache_compact = build_dashboard_payload(compact=True)
+
+
+def apply_request_post_processing(request_id: str) -> None:
+    # Keep request-response path lightweight while guaranteeing derived fields stay fresh.
+    request = find_request(request_id)
+    if not request:
+        return
+
+    category = request["category"]
+    family_size = request.get("family_size", request.get("people", 1))
+    request["priority"] = compute_priority(category, family_size, request["createdAt"])
+    request["resourcesNeeded"] = calculate_resources(category, family_size)
+    request["priorityReason"] = priority_reason(category, family_size)
+
+    if category == "food":
+        request["resourceSummary"] = resource_summary(category, family_size)
+    elif category == "medical":
+        request["resourceSummary"] = resource_summary(category, family_size)
+    elif category == "rescue":
+        request["resourceSummary"] = resource_summary(category, family_size)
+    else:
+        request["resourceSummary"] = resource_summary(category, family_size)
+
+    if request.get("status") == "completed":
+        request["executionStatus"] = "completed"
+    elif request.get("status") == "assigned" and request.get("executionStatus") not in {"on_the_way", "completed"}:
+        request["executionStatus"] = "assigned"
+    elif request.get("status") == "pending":
+        request["executionStatus"] = "pending"
+
+    refresh_dashboard_cache()
+
+
+def schedule_cache_refresh(background_tasks: BackgroundTasks | None) -> None:
+    if background_tasks is None:
+        refresh_dashboard_cache()
+    else:
+        background_tasks.add_task(refresh_dashboard_cache)
+
+
+async def cache_refresh_loop() -> None:
+    while True:
+        await asyncio.sleep(5)
+        refresh_dashboard_cache()
 
 
 def consume_inventory_for_request(request: dict[str, Any]) -> None:
@@ -264,6 +455,14 @@ def consume_inventory_for_request(request: dict[str, Any]) -> None:
             resource["available"] = max(0, resource["available"] - int(needed.get("medicine_kits", 0)))
         elif resource["name"] == "Shelter Units":
             resource["available"] = max(0, resource["available"] - int(needed.get("shelter_units", 0)))
+        elif resource["name"] == "Baby Care Kits":
+            resource["available"] = max(0, resource["available"] - int(needed.get("baby_care_kits", 0)))
+        elif resource["name"] == "Women Care Kits":
+            resource["available"] = max(0, resource["available"] - int(needed.get("women_care_kits", 0)))
+        elif resource["name"] == "Water Supply":
+            resource["available"] = max(0, resource["available"] - int(needed.get("water_supply", needed.get("water_liters", 0))))
+        elif resource["name"] == "Emergency Essentials":
+            resource["available"] = max(0, resource["available"] - int(needed.get("emergency_essentials", 0)))
 
     request["inventoryUpdated"] = True
 
@@ -279,15 +478,28 @@ def nearest_volunteer(request: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def update_summary() -> dict[str, Any]:
-    active = len([item for item in requests if item["status"] != "completed"])
-    completed = len([item for item in requests if item["status"] == "completed"])
-    critical = len([item for item in requests if item["priority"] >= 60 and item["status"] != "completed"])
+    active = 0
+    completed = 0
+    critical = 0
+    for item in requests:
+        if item["status"] == "completed":
+            completed += 1
+            continue
+        active += 1
+        if item["priority"] >= 60:
+            critical += 1
+
+    volunteers_available = 0
+    for item in volunteers:
+        if item["availability"] == "available":
+            volunteers_available += 1
+
     return {
         "totalRequests": len(requests),
         "activeRequests": active,
         "criticalRequests": critical,
         "completedRequests": completed,
-        "volunteersAvailable": len([item for item in volunteers if item["availability"] == "available"]),
+        "volunteersAvailable": volunteers_available,
     }
 
 
@@ -319,7 +531,7 @@ def seed_data() -> None:
                 "vehicle": i % 3 != 0,
                 "availability": "available" if i < 12 else ("busy" if i < 18 else "inactive"),
                 "zone": zone,
-                "image": f"https://i.pravatar.cc/150?img={(i % 70) + 1}",
+                "image": f"/volunteers/{'m' if i < 20 else 'f'}{(i % 20) + 1 if i < 20 else (i - 20) + 1}.jpg",
                 "idCard": f"JH-NDMA-{i + 1:04}",
                 "age": 22 + (i % 13),
                 "lat": ZONE_COORDS[zone][0] + (i % 4) * 0.04,
@@ -329,7 +541,7 @@ def seed_data() -> None:
         )
         volunteer_counter += 1
 
-    categories = ["food", "medical", "rescue", "shelter", "food", "food", "medical", "rescue"]
+    categories = ["food", "medical", "rescue", "shelter", "baby_care", "women_care", "water", "emergency_help", "food", "medical"]
     sources: list[RequestSource] = ["web", "ivr", "whatsapp", "missed_call", "drone", "web"]
     for i in range(65):
         zone = zone_cycle[i % len(zone_cycle)]
@@ -353,14 +565,11 @@ def seed_data() -> None:
             "priority": compute_priority(category, family_size, created_at),
             "createdAt": created_at,
             "status": status,
+            "executionStatus": "completed" if status == "completed" else ("assigned" if status == "assigned" else "pending"),
             "source": source,
             "sourceLabel": source.replace("_", " ").title(),
             "resourcesNeeded": calculate_resources(category, family_size),
-            "resourceSummary": f"Food needed: {family_size * 2} units" if category == "food" else (
-                f"Medicine kits needed: {max(1, ceil(family_size / 2))} units" if category == "medical" else (
-                    f"Rescue support needed for {family_size} people" if category == "rescue" else f"Shelter units needed: {max(1, ceil(family_size / 4))}"
-                )
-            ),
+            "resourceSummary": resource_summary(category, family_size),
             "priorityReason": priority_reason(category, family_size),
             "mergedCount": 1 if i % 5 else (2 + (i % 3)),
             "assignedVolunteerId": None,
@@ -388,7 +597,10 @@ resources = [
     {"name": "Food Packets", "total": 2500, "available": 480, "unit": "packets", "dailyConsumption": 410},
     {"name": "Medical Kits", "total": 800, "available": 260, "unit": "kits", "dailyConsumption": 110},
     {"name": "Shelter Units", "total": 400, "available": 190, "unit": "units", "dailyConsumption": 32},
-    {"name": "Rescue Boats", "total": 40, "available": 28, "unit": "boats", "dailyConsumption": 0},
+    {"name": "Baby Care Kits", "total": 300, "available": 92, "unit": "kits", "dailyConsumption": 24},
+    {"name": "Women Care Kits", "total": 260, "available": 80, "unit": "kits", "dailyConsumption": 18},
+    {"name": "Water Supply", "total": 5000, "available": 1460, "unit": "liters", "dailyConsumption": 480},
+    {"name": "Emergency Essentials", "total": 600, "available": 175, "unit": "kits", "dailyConsumption": 60},
 ]
 
 camps = [
@@ -403,15 +615,36 @@ alerts = [
     "Evacuation advisory issued for river-adjacent settlements",
 ]
 
+refresh_dashboard_cache()
+
+
+@app.on_event("startup")
+async def startup_event() -> None:
+    global cache_refresh_task
+    if cache_refresh_task is None or cache_refresh_task.done():
+        cache_refresh_task = asyncio.create_task(cache_refresh_loop())
+
+
+@app.on_event("shutdown")
+async def shutdown_event() -> None:
+    global cache_refresh_task
+    if cache_refresh_task:
+        cache_refresh_task.cancel()
+        try:
+            await cache_refresh_task
+        except asyncio.CancelledError:
+            pass
+        cache_refresh_task = None
+
 
 @app.get("/")
-def root() -> dict[str, Any]:
+async def root() -> dict[str, Any]:
     return {"service": "SahayakNet API", "status": "ok"}
 
 
 @app.post("/request")
-def create_request(payload: RequestIn):
-    return build_request(
+async def create_request(payload: RequestIn, background_tasks: BackgroundTasks):
+    request = build_request(
         name=payload.name,
         phone=payload.phone,
         category=payload.category,
@@ -422,20 +655,23 @@ def create_request(payload: RequestIn):
         lat=payload.lat,
         lng=payload.lng,
     )
+    background_tasks.add_task(apply_request_post_processing, request["id"])
+    schedule_cache_refresh(background_tasks)
+    return request
 
 
 @app.post("/requests")
-def create_request_legacy(payload: RequestIn):
-    return create_request(payload)
+async def create_request_legacy(payload: RequestIn, background_tasks: BackgroundTasks):
+    return await create_request(payload, background_tasks)
 
 
 @app.get("/requests")
-def get_requests() -> list[dict[str, Any]]:
+async def get_requests() -> list[dict[str, Any]]:
     return requests
 
 
 @app.get("/request/{request_id}")
-def get_request(request_id: str) -> dict[str, Any]:
+async def get_request(request_id: str) -> dict[str, Any]:
     request = find_request(request_id)
     if not request:
         raise HTTPException(status_code=404, detail="Request not found")
@@ -443,7 +679,7 @@ def get_request(request_id: str) -> dict[str, Any]:
 
 
 @app.post("/assign")
-def assign_request(payload: AssignIn):
+async def assign_request(payload: AssignIn, background_tasks: BackgroundTasks):
     global mission_counter
     request = find_request(payload.request_id)
     volunteer = find_volunteer(payload.volunteer_id)
@@ -457,6 +693,7 @@ def assign_request(payload: AssignIn):
         raise HTTPException(status_code=400, detail="Inactive volunteer cannot be assigned")
 
     request["status"] = "assigned"
+    request["executionStatus"] = "assigned"
     request["assignedVolunteerId"] = volunteer["id"]
     request["assignedVolunteerName"] = volunteer["name"]
     eta_minutes = 15 + int(abs(request["lat"] - volunteer["lat"]) * 100)
@@ -475,16 +712,43 @@ def assign_request(payload: AssignIn):
         }
     )
     mission_counter += 1
+    schedule_cache_refresh(background_tasks)
     return {"success": True, "request": request, "missionId": mission_id}
 
 
+@app.post("/mission/start")
+async def start_mission(payload: MissionStartIn, background_tasks: BackgroundTasks):
+    request = find_request(payload.request_id)
+    volunteer = find_volunteer(payload.volunteer_id)
+    if not request:
+        raise HTTPException(status_code=404, detail="Request not found")
+    if not volunteer:
+        raise HTTPException(status_code=404, detail="Volunteer not found")
+    if request.get("assignedVolunteerId") != volunteer.get("id"):
+        raise HTTPException(status_code=400, detail="Volunteer is not assigned to this request")
+    if request.get("status") == "completed":
+        raise HTTPException(status_code=400, detail="Completed request cannot be started")
+
+    request["status"] = "assigned"
+    request["executionStatus"] = "on_the_way"
+    volunteer["availability"] = "busy"
+
+    if not request.get("eta"):
+        eta_minutes = 15 + int(abs(request["lat"] - volunteer["lat"]) * 100)
+        request["eta"] = f"{eta_minutes} mins"
+
+    schedule_cache_refresh(background_tasks)
+    return {"success": True, "request": request}
+
+
 @app.post("/complete")
-def complete_request(payload: CompleteIn):
+async def complete_request(payload: CompleteIn, background_tasks: BackgroundTasks):
     request = find_request(payload.request_id)
     if not request:
         raise HTTPException(status_code=404, detail="Request not found")
 
     request["status"] = "completed"
+    request["executionStatus"] = "completed"
     consume_inventory_for_request(request)
     volunteer_id = request.get("assignedVolunteerId")
     if volunteer_id:
@@ -498,16 +762,20 @@ def complete_request(payload: CompleteIn):
         mission["status"] = "completed"
         mission["completedAt"] = now_iso()
 
+    if request.get("category") and request.get("location"):
+        duplicate_request_index.pop(duplicate_key(request["category"], request["location"]), None)
+
+    schedule_cache_refresh(background_tasks)
     return {"success": True, "request": request}
 
 
 @app.get("/volunteers")
-def get_volunteers() -> list[dict[str, Any]]:
+async def get_volunteers() -> list[dict[str, Any]]:
     return volunteers
 
 
 @app.post("/volunteer")
-def create_volunteer(payload: VolunteerIn):
+async def create_volunteer(payload: VolunteerIn, background_tasks: BackgroundTasks):
     global volunteer_counter
     zone = payload.zone if payload.zone in ZONE_COORDS else "Ranchi"
     lat = payload.lat if payload.lat is not None else ZONE_COORDS[zone][0]
@@ -528,20 +796,22 @@ def create_volunteer(payload: VolunteerIn):
     }
     volunteers.append(volunteer)
     volunteer_counter += 1
+    schedule_cache_refresh(background_tasks)
     return volunteer
 
 
 @app.post("/volunteer/status")
-def update_volunteer_status(payload: VolunteerStatusIn):
+async def update_volunteer_status(payload: VolunteerStatusIn, background_tasks: BackgroundTasks):
     volunteer = find_volunteer(payload.volunteer_id)
     if not volunteer:
         raise HTTPException(status_code=404, detail="Volunteer not found")
     volunteer["availability"] = payload.availability
+    schedule_cache_refresh(background_tasks)
     return {"success": True, "volunteer": volunteer}
 
 
 @app.post("/alerts")
-def create_alert(payload: AlertIn):
+async def create_alert(payload: AlertIn, background_tasks: BackgroundTasks):
     message = payload.message.strip()
     if not message:
         raise HTTPException(status_code=400, detail="Message is required")
@@ -550,6 +820,8 @@ def create_alert(payload: AlertIn):
     channels = [channel.upper() for channel in payload.channels]
     feed_line = f"{message} | Message sent to {sent_to} users via {'/'.join(channels)}"
     alerts.insert(0, feed_line)
+
+    schedule_cache_refresh(background_tasks)
 
     return {
         "success": True,
@@ -564,12 +836,12 @@ def create_alert(payload: AlertIn):
 
 
 @app.post("/ivr")
-def ivr_create(payload: IVRIn):
-    digit_map = {"1": "food", "2": "medical", "3": "rescue", "4": "shelter"}
+async def ivr_create(payload: IVRIn, background_tasks: BackgroundTasks):
+    digit_map = {"1": "food", "2": "medical", "3": "rescue", "4": "shelter", "5": "baby_care", "6": "women_care", "7": "water", "8": "emergency_help"}
     category = digit_map.get(payload.digit, "food")
     zone = payload.zone or "Ranchi"
     location = payload.location or f"{zone} IVR Input"
-    return build_request(
+    request = build_request(
         name="IVR Caller",
         phone=payload.phone,
         category=category,  # type: ignore[arg-type]
@@ -578,18 +850,29 @@ def ivr_create(payload: IVRIn):
         zone=zone,
         source="ivr",
     )
+    background_tasks.add_task(apply_request_post_processing, request["id"])
+    schedule_cache_refresh(background_tasks)
+    return request
 
 
 @app.post("/whatsapp")
-def whatsapp_create(payload: WhatsAppIn):
+async def whatsapp_create(payload: WhatsAppIn, background_tasks: BackgroundTasks):
     text = payload.message.lower()
     category: RequestCategory = "food"
-    if any(token in text for token in ["medical", "doctor", "medicine", "hospital"]):
+    if any(token in text for token in ["baby", "infant", "diaper", "milk"]):
+        category = "baby_care"
+    elif any(token in text for token in ["women", "woman", "sanitary", "pad", "hygiene"]):
+        category = "women_care"
+    elif any(token in text for token in ["water", "drink", "hydration"]):
+        category = "water"
+    elif any(token in text for token in ["medical", "doctor", "medicine", "hospital"]):
         category = "medical"
     elif any(token in text for token in ["rescue", "trapped", "stuck", "help"]):
         category = "rescue"
     elif any(token in text for token in ["shelter", "house", "roof", "camp"]):
         category = "shelter"
+    elif any(token in text for token in ["emergency", "urgent", "essential", "power", "torch"]):
+        category = "emergency_help"
 
     number = 1
     for token in payload.message.split():
@@ -599,7 +882,7 @@ def whatsapp_create(payload: WhatsAppIn):
 
     zone = payload.zone or "Jamshedpur"
     location = payload.location or f"{zone} WhatsApp Input"
-    return build_request(
+    request = build_request(
         name="WhatsApp User",
         phone=payload.phone,
         category=category,
@@ -608,14 +891,17 @@ def whatsapp_create(payload: WhatsAppIn):
         zone=zone,
         source="whatsapp",
     )
+    background_tasks.add_task(apply_request_post_processing, request["id"])
+    schedule_cache_refresh(background_tasks)
+    return request
 
 
 @app.post("/missed-call")
-def missed_call_create(payload: MissedCallIn):
+async def missed_call_create(payload: MissedCallIn, background_tasks: BackgroundTasks):
     zone = payload.zone or "Dhanbad"
     phone = payload.phone or f"98{datetime.now().strftime('%H%M%S')}"
     location = payload.location or f"{zone} Missed Call Signal"
-    return build_request(
+    request = build_request(
         name="Unknown Caller",
         phone=phone,
         category="rescue",
@@ -624,10 +910,13 @@ def missed_call_create(payload: MissedCallIn):
         zone=zone,
         source="missed_call",
     )
+    background_tasks.add_task(apply_request_post_processing, request["id"])
+    schedule_cache_refresh(background_tasks)
+    return request
 
 
 @app.post("/drone")
-def drone_create(payload: DroneDetectionIn):
+async def drone_create(payload: DroneDetectionIn, background_tasks: BackgroundTasks):
     zone = payload.zone or payload.area or "Ranchi"
     location = payload.area or f"{zone} Drone Detection"
     category: RequestCategory = "rescue" if payload.flag == "red" else "food"
@@ -636,7 +925,7 @@ def drone_create(payload: DroneDetectionIn):
     if lat is None or lng is None:
         lat = ZONE_COORDS["Ranchi"][0]
         lng = ZONE_COORDS["Ranchi"][1]
-    return build_request(
+    request = build_request(
         name=f"Drone Target {payload.id or 'AUTO'}",
         phone="0000000000",
         category=category,
@@ -647,25 +936,49 @@ def drone_create(payload: DroneDetectionIn):
         lat=lat,
         lng=lng,
     )
+    background_tasks.add_task(apply_request_post_processing, request["id"])
+    schedule_cache_refresh(background_tasks)
+    return request
 
 
 @app.post("/priority")
-def update_priority(payload: PriorityIn):
+async def update_priority(payload: PriorityIn, background_tasks: BackgroundTasks):
     request = find_request(payload.request_id)
     if not request:
         raise HTTPException(status_code=404, detail="Request not found")
     request["priority"] = payload.priority
+    schedule_cache_refresh(background_tasks)
     return {"success": True, "request": request}
 
 
 @app.get("/dashboard")
-def get_dashboard() -> dict[str, Any]:
-    return {
-        "summary": update_summary(),
-        "resources": resources,
-        "alerts": alerts,
-        "volunteers": volunteers,
-        "requests": requests,
-        "missions": missions,
-        "camps": camps,
-    }
+async def get_dashboard(
+    request: Request,
+    response: Response,
+    compact: bool = False,
+    last_updated: str | None = None,
+) -> Any:
+    # Default behavior remains full payload for compatibility.
+    payload = dashboard_cache_compact if compact else dashboard_cache_full
+
+    etag = f'W/"{dashboard_cache_updated_at}"'
+    response.headers["ETag"] = etag
+    response.headers["Cache-Control"] = "no-cache"
+
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers={"ETag": etag, "Cache-Control": "no-cache"})
+
+    if last_updated and last_updated == dashboard_cache_updated_at:
+        return {
+            "summary": payload.get("summary", {}),
+            "resources": payload.get("resources", []),
+            "alerts": [],
+            "volunteers": [],
+            "requests": [],
+            "missions": [],
+            "camps": payload.get("camps", []),
+            "updatedAt": dashboard_cache_updated_at,
+            "lastUpdated": dashboard_cache_updated_at,
+        }
+
+    return payload

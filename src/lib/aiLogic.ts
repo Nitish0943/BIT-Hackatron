@@ -1,5 +1,37 @@
 import { HelpRequest, RequestCategory, Resource, Volunteer } from './mockData';
 
+export const REQUEST_CATEGORY_LABELS: Record<RequestCategory, string> = {
+  food: 'Food',
+  medical: 'Medical',
+  rescue: 'Rescue',
+  shelter: 'Shelter',
+  baby_care: 'Baby Care',
+  women_care: 'Women Care',
+  water: 'Water',
+  emergency_help: 'Emergency Help',
+};
+
+export const REQUEST_CATEGORY_HINTS: Record<RequestCategory, string[]> = {
+  food: ['food', 'hunger', 'ration'],
+  medical: ['medical', 'doctor', 'medicine', 'injury', 'cpr'],
+  rescue: ['rescue', 'trapped', 'stuck', 'evacuate'],
+  shelter: ['shelter', 'house', 'camp', 'roof'],
+  baby_care: ['baby', 'infant', 'milk', 'diaper'],
+  women_care: ['women', 'woman', 'sanitary', 'hygiene', 'pads'],
+  water: ['water', 'drink', 'hydration', 'borewell'],
+  emergency_help: ['emergency', 'help', 'urgent', 'essential', 'power', 'torch'],
+};
+
+type ResourceNeedSummary = {
+  food: number;
+  medicine: number;
+  shelter: number;
+  babyCare: number;
+  womenCare: number;
+  water: number;
+  emergency: number;
+};
+
 export interface DepletionForecast {
   resourceName: string;
   available: number;
@@ -9,10 +41,14 @@ export interface DepletionForecast {
 }
 
 const SEVERITY_MAP: Record<RequestCategory, number> = {
-  medical: 50,
-  rescue: 45,
-  food: 30,
-  shelter: 20,
+  medical: 60,
+  emergency_help: 58,
+  rescue: 55,
+  baby_care: 52,
+  women_care: 50,
+  water: 42,
+  food: 35,
+  shelter: 25,
 };
 
 export function computePriority(category: RequestCategory, people: number, createdAt: string): number {
@@ -37,10 +73,14 @@ export function priorityLabel(priority: number): 'Critical' | 'Medium' | 'Low' {
 
 export function explainPriority(request: HelpRequest): string {
   const parts: string[] = [];
-  if (request.category === 'medical') parts.push('injury');
+  if (request.category === 'medical') parts.push('medical emergency');
   if (request.category === 'rescue') parts.push('rescue need');
   if (request.category === 'shelter') parts.push('shelter shortage');
   if (request.category === 'food') parts.push('food shortage');
+  if (request.category === 'baby_care') parts.push('infant support need');
+  if (request.category === 'women_care') parts.push('women care shortage');
+  if (request.category === 'water') parts.push('water shortage');
+  if (request.category === 'emergency_help') parts.push('critical emergency');
   parts.push(`${request.people} member${request.people > 1 ? 's' : ''}`);
 
   const waitingHours = Math.max(0, Math.floor((Date.now() - new Date(request.createdAt).getTime()) / 3_600_000));
@@ -57,6 +97,14 @@ export function mergeMessage(request: HelpRequest): string | null {
 export function resourceEstimate(request: HelpRequest): string {
   if (request.resourceSummary) return request.resourceSummary;
   switch (request.category) {
+    case 'baby_care':
+      return `Baby care kits needed: ${Math.max(1, Math.ceil(request.people / 2))} units`;
+    case 'women_care':
+      return `Women care kits needed: ${Math.max(1, Math.ceil(request.people / 2))} units`;
+    case 'water':
+      return `Water supply needed: ${Math.max(2, request.people * 3)} liters`;
+    case 'emergency_help':
+      return `Emergency essentials needed for ${request.people} people`;
     case 'medical':
       return `Medicine kits needed: ${Math.max(1, Math.ceil(request.people / 2))} units`;
     case 'rescue':
@@ -84,14 +132,22 @@ export function requiredResources(requests: HelpRequest[]) {
         if (req.category === 'food') acc.food += req.people * 2;
         if (req.category === 'medical') acc.medicine += Math.max(1, Math.ceil(req.people / 2));
         if (req.category === 'shelter') acc.shelter += Math.max(1, Math.ceil(req.people / 4));
+        if (req.category === 'baby_care') acc.babyCare += Math.max(1, Math.ceil(req.people / 2));
+        if (req.category === 'women_care') acc.womenCare += Math.max(1, Math.ceil(req.people / 2));
+        if (req.category === 'water') acc.water += Math.max(3, req.people * 3);
+        if (req.category === 'emergency_help') acc.emergency += Math.max(1, Math.ceil(req.people / 2));
         return acc;
       }
       acc.food += r.food_packets ?? 0;
       acc.medicine += r.medicine_kits ?? 0;
       acc.shelter += r.shelter_units ?? 0;
+      acc.babyCare += r.baby_care_kits ?? 0;
+      acc.womenCare += r.women_care_kits ?? 0;
+      acc.water += (r.water_supply ?? 0) + (r.water_liters ?? 0);
+      acc.emergency += (r.emergency_essentials ?? 0) + (r.rescue_boats ?? 0);
       return acc;
     },
-    { food: 0, medicine: 0, shelter: 0 },
+    { food: 0, medicine: 0, shelter: 0, babyCare: 0, womenCare: 0, water: 0, emergency: 0 },
   );
 }
 
@@ -192,9 +248,13 @@ export function predictDepletion(resources: Resource[]): DepletionForecast[] {
 
 export function parseWhatsAppMessage(text: string): RequestCategory {
   const lower = text.toLowerCase();
+  if (lower.includes('baby') || lower.includes('infant') || lower.includes('diaper') || lower.includes('milk')) return 'baby_care';
+  if (lower.includes('women') || lower.includes('woman') || lower.includes('sanitary') || lower.includes('pad') || lower.includes('hygiene')) return 'women_care';
+  if (lower.includes('water') || lower.includes('drink') || lower.includes('hydration')) return 'water';
   if (lower.includes('medical') || lower.includes('doctor') || lower.includes('medicine')) return 'medical';
   if (lower.includes('rescue') || lower.includes('trapped') || lower.includes('stuck')) return 'rescue';
   if (lower.includes('shelter') || lower.includes('house') || lower.includes('camp')) return 'shelter';
+  if (lower.includes('emergency') || lower.includes('urgent') || lower.includes('essential') || lower.includes('torch') || lower.includes('power')) return 'emergency_help';
   return 'food';
 }
 
@@ -204,6 +264,10 @@ export function ivrCodeToCategory(code: string): RequestCategory {
     '2': 'medical',
     '3': 'rescue',
     '4': 'shelter',
+    '5': 'baby_care',
+    '6': 'women_care',
+    '7': 'water',
+    '8': 'emergency_help',
   };
   return map[code] ?? 'food';
 }

@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useApp } from '@/lib/store';
 import { Phone, MessageSquare, Zap, Cpu, CheckCircle } from 'lucide-react';
-import { ivrCodeToCategory, parseWhatsAppMessage } from '@/lib/aiLogic';
+import { REQUEST_CATEGORY_LABELS, ivrCodeToCategory, parseWhatsAppMessage } from '@/lib/aiLogic';
 import {
   createDroneRequest,
   createIvrRequest,
@@ -125,14 +125,17 @@ export default function MultiChannelPanel() {
               value={ivrPhone}
               onChange={e => setIvrPhone(e.target.value)}
             />
-            <div className="grid grid-cols-3 gap-2 mb-3">
-              {[['1','🍱 Food'],['2','🏥 Medical'],['3','🚨 Rescue'],['4','💧 Water'],['5','🏠 Shelter']].map(([d, label]) => (
+            <div className="grid grid-cols-3 gap-2 mb-3 md:grid-cols-4">
+              {[
+                ['1','food'],['2','medical'],['3','rescue'],['4','shelter'],
+                ['5','baby_care'],['6','women_care'],['7','water'],['8','emergency_help'],
+              ].map(([d, category]) => (
                 <button
                   key={d}
                   onClick={() => handleIVR(d)}
                   className="py-2 px-3 rounded-lg text-xs font-bold border-2 border-blue-100 hover:bg-blue-600 hover:text-white hover:border-blue-600 transition-all"
                 >
-                  Press {d} – {label}
+                  Press {d} – {REQUEST_CATEGORY_LABELS[category as keyof typeof REQUEST_CATEGORY_LABELS]}
                 </button>
               ))}
             </div>
@@ -167,7 +170,7 @@ export default function MultiChannelPanel() {
         {activeTab === 'whatsapp' && (
           <div>
             <div className="text-xs text-gray-500 mb-3">Simulate WhatsApp message. Keywords are parsed to create requests.</div>
-            <div className="text-xs text-blue-600 mb-2 font-medium">Example: "Need food for 5 people" or "Doctor needed, family of 3"</div>
+            <div className="text-xs text-blue-600 mb-2 font-medium">Example: "Need food for 5 people", "Baby care needed", or "Urgent water shortage"</div>
             <input
               className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mb-2"
               placeholder="Sender phone number"

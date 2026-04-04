@@ -5,6 +5,7 @@ import dynamic from 'next/dynamic';
 import { useRouter } from 'next/navigation';
 import Image from 'next/image';
 import { useApp } from '@/lib/store';
+import MissionTimeline from '@/components/MissionTimeline';
 
 const MapView = dynamic(() => import('@/components/MapView'), { ssr: false });
 
@@ -13,6 +14,10 @@ const CATEGORY_BUTTONS = [
   { id: 'medical', label: '💊 Medical', tone: 'bg-red-50 text-red-700 border-red-200' },
   { id: 'rescue', label: '🚑 Rescue', tone: 'bg-amber-50 text-amber-700 border-amber-200' },
   { id: 'shelter', label: '🏠 Shelter', tone: 'bg-blue-50 text-blue-700 border-blue-200' },
+  { id: 'baby_care', label: '🍼 Baby Care', tone: 'bg-pink-50 text-pink-700 border-pink-200' },
+  { id: 'women_care', label: '🩷 Women Care', tone: 'bg-rose-50 text-rose-700 border-rose-200' },
+  { id: 'water', label: '💧 Water', tone: 'bg-cyan-50 text-cyan-700 border-cyan-200' },
+  { id: 'emergency_help', label: '⚠️ Emergency', tone: 'bg-slate-50 text-slate-700 border-slate-200' },
 ] as const;
 
 const FALLBACK_HISTORY = [
@@ -20,6 +25,7 @@ const FALLBACK_HISTORY = [
   { id: 'MOCK-2', category: 'medical', status: 'completed', text: '2 hours ago' },
   { id: 'MOCK-3', category: 'rescue', status: 'pending', text: 'Yesterday' },
   { id: 'MOCK-4', category: 'shelter', status: 'completed', text: '2 days ago' },
+  { id: 'MOCK-5', category: 'baby_care', status: 'pending', text: '2 days ago' },
 ] as const;
 
 function statusTone(status: string) {
@@ -28,10 +34,18 @@ function statusTone(status: string) {
   return 'bg-red-100 text-red-700';
 }
 
-function requestStatusLine(status: string) {
-  if (status === 'completed') return 'Completed';
-  if (status === 'assigned') return 'Volunteer is on the way';
+function requestExecutionLine(status: string, executionStatus?: string) {
+  if (status === 'completed' || executionStatus === 'completed') return 'Completed';
+  if (executionStatus === 'on_the_way') return 'Volunteer is on the way';
+  if (status === 'assigned' || executionStatus === 'assigned') return 'Assigned';
   return 'Pending assignment';
+}
+
+function executionProgress(status: string, executionStatus?: string) {
+  if (status === 'completed' || executionStatus === 'completed') return 100;
+  if (executionStatus === 'on_the_way') return 72;
+  if (status === 'assigned' || executionStatus === 'assigned') return 42;
+  return 16;
 }
 
 export default function CitizenPortalPage() {
@@ -98,7 +112,7 @@ export default function CitizenPortalPage() {
     ? state.dashboard.volunteers.find((v) => v.id === latest.assignedVolunteerId) || null
     : null;
 
-  const sendRequest = async (category: 'food' | 'medical' | 'rescue' | 'shelter') => {
+  const sendRequest = async (category: 'food' | 'medical' | 'rescue' | 'shelter' | 'baby_care' | 'women_care' | 'water' | 'emergency_help') => {
     setSendingCategory(category);
     setNotice('');
 
@@ -151,11 +165,18 @@ export default function CitizenPortalPage() {
         </section>
 
         <section className="rounded-2xl border border-slate-200 bg-white shadow-sm p-5 text-center">
+          <div className="mb-3 flex items-center justify-center gap-3 text-xs">
+              <span className={`inline-flex items-center gap-1 rounded-full px-2 py-1 font-semibold ${state.loading ? 'bg-blue-50 text-blue-700' : 'bg-emerald-50 text-emerald-700'}`}>
+              <span className={`inline-block h-1.5 w-1.5 rounded-full ${state.loading ? 'bg-blue-600 animate-ping' : 'bg-emerald-600'}`} />
+              {state.loading ? 'Syncing...' : 'Live sync active'}
+            </span>
+            {sendingCategory && <span className="rounded-full bg-amber-50 px-2 py-1 font-semibold text-amber-700">Updating...</span>}
+          </div>
           <div className="text-lg font-bold text-[#0b3c5d] mb-3">One Tap Emergency Help</div>
           <button
             onClick={() => sendRequest('rescue')}
             disabled={sendingCategory !== ''}
-            className="w-full py-6 rounded-2xl bg-[#c62828] hover:bg-[#a31f1f] text-white text-3xl font-black disabled:opacity-60"
+            className="w-full py-6 rounded-2xl bg-[#c62828] hover:bg-[#a31f1f] active:scale-[0.99] transition-all duration-150 text-white text-3xl font-black disabled:opacity-60"
           >
             🚨 NEED HELP
           </button>
@@ -166,7 +187,7 @@ export default function CitizenPortalPage() {
                 key={item.id}
                 onClick={() => sendRequest(item.id)}
                 disabled={sendingCategory !== ''}
-                className={`py-3 rounded-xl border font-bold text-lg ${item.tone} disabled:opacity-60`}
+                className={`py-3 rounded-xl border font-bold text-lg ${item.tone} transition-all duration-200 hover:-translate-y-0.5 hover:shadow-sm active:scale-[0.99] disabled:opacity-60`}
               >
                 {item.label}
               </button>
@@ -205,11 +226,31 @@ export default function CitizenPortalPage() {
             {latest ? (
               <>
                 <div className="text-sm text-slate-700"><strong>ID:</strong> {latest.id}</div>
-                <div className="text-sm text-slate-700"><strong>Type:</strong> {latest.category.toUpperCase()}</div>
+                <div className="text-sm text-slate-700"><strong>Type:</strong> {latest.category.replaceAll('_', ' ').toUpperCase()}</div>
                 <div className="text-sm text-slate-700"><strong>Status:</strong> <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${statusTone(latest.status)}`}>{latest.status.toUpperCase()}</span></div>
                 <div className="text-sm text-slate-700"><strong>ETA:</strong> {latest.eta || 'Awaiting assignment'}</div>
                 <div className="text-sm text-slate-700"><strong>Volunteer:</strong> {latest.assignedVolunteerName || 'Not assigned yet'}</div>
-                <div className="text-sm font-semibold text-[#0b3c5d]">{requestStatusLine(latest.status)}</div>
+                <div className="text-sm font-semibold text-[#0b3c5d] status-flash">{requestExecutionLine(latest.status, latest.executionStatus)}</div>
+
+                <div className="pt-1">
+                  <div className="mb-1 flex items-center justify-between text-xs text-slate-500">
+                    <span>Mission progress</span>
+                    <span>{executionProgress(latest.status, latest.executionStatus)}%</span>
+                  </div>
+                  <div className="h-2 rounded-full bg-slate-200 overflow-hidden">
+                    <div
+                      className="h-full bg-[#0b3c5d] transition-all duration-700 ease-out"
+                      style={{ width: `${executionProgress(latest.status, latest.executionStatus)}%` }}
+                    />
+                  </div>
+                </div>
+
+                <MissionTimeline
+                  requestId={latest.id}
+                  createdAt={latest.createdAt}
+                  status={latest.status}
+                  executionStatus={latest.executionStatus}
+                />
               </>
             ) : (
               <div className="text-sm text-slate-500">No live request yet. Press NEED HELP to start emergency workflow.</div>
@@ -229,7 +270,7 @@ export default function CitizenPortalPage() {
           <section className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
             <div className="px-4 py-3 border-b border-slate-200">
               <h2 className="text-xl font-black text-[#0b3c5d]">Volunteer Tracking</h2>
-              <p className="text-sm text-slate-600">Volunteer is on the way</p>
+              <p className="text-sm text-slate-600">{requestExecutionLine(latest.status, latest.executionStatus)}</p>
             </div>
             <div className="grid lg:grid-cols-3 gap-3 p-4">
               <div className="space-y-2 text-sm text-slate-700">
@@ -241,7 +282,7 @@ export default function CitizenPortalPage() {
                   </div>
                 </div>
                 <div><strong>ETA:</strong> {latest.eta || 'Arriving soon'}</div>
-                <div><strong>Status:</strong> Volunteer is on the way</div>
+                <div><strong>Status:</strong> {requestExecutionLine(latest.status, latest.executionStatus)}</div>
               </div>
               <div className="lg:col-span-2 rounded-xl border border-slate-200 overflow-hidden">
                 <MapView requests={[latest]} volunteers={[assignedVolunteer]} height="240px" showHeatmap showClusters />

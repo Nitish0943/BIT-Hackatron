@@ -31,13 +31,13 @@ export function getVolunteers(): Promise<any[]> {
 }
 
 export function getDashboard(): Promise<DashboardData> {
-	return call<DashboardData>('/dashboard');
+	return call<DashboardData>('/dashboard?compact=1');
 }
 
 export function createRequest(payload: {
 	name: string;
 	phone: string;
-	category: 'food' | 'medical' | 'rescue' | 'shelter';
+	category: 'food' | 'medical' | 'rescue' | 'shelter' | 'baby_care' | 'women_care' | 'water' | 'emergency_help';
 	people: number;
 	location: string;
 	zone: string;
@@ -91,6 +91,13 @@ export function completeRequest(payload: { request_id: string }) {
 	});
 }
 
+export function startMission(payload: { request_id: string; volunteer_id: string }) {
+	return call<{ success: boolean; request: HelpRequest }>('/mission/start', {
+		method: 'POST',
+		body: JSON.stringify(payload),
+	});
+}
+
 export function updatePriority(payload: { request_id: string; priority: number }) {
 	return call<{ success: boolean; request: HelpRequest }>('/priority', {
 		method: 'POST',
@@ -137,7 +144,7 @@ export function createDroneRequest(payload: {
 export function mergeDuplicateRequest(payload: {
 	name: string;
 	phone: string;
-	category: 'food' | 'medical' | 'rescue' | 'shelter';
+	category: 'food' | 'medical' | 'rescue' | 'shelter' | 'baby_care' | 'women_care' | 'water' | 'emergency_help';
 	people: number;
 	location: string;
 	zone: string;

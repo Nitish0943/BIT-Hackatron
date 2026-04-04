@@ -90,6 +90,16 @@ function haversineKm(a: [number, number], b: [number, number]) {
 export default function MapView({ requests, volunteers = [], height = '400px', showHeatmap = false, showClusters = true }: Props) {
   const [tick, setTick] = useState(0);
   const clusters = useMemo(() => clusterNearbyRequests(requests), [requests]);
+  const activeRequests = useMemo(() => requests.filter((request) => request.status !== 'completed'), [requests]);
+  const zoneLoad = useMemo(() => {
+    return DISTRICT_ZONES.map((zone) => {
+      const count = activeRequests.filter((request) => {
+        const dist = haversineKm(zone.center, [request.lat, request.lng]);
+        return dist <= 20;
+      }).length;
+      return { ...zone, count };
+    });
+  }, [activeRequests]);
   const routePairs = useMemo(() => {
     return requests
       .filter((request) => request.assignedVolunteerId && request.status !== 'completed')
@@ -121,16 +131,34 @@ export default function MapView({ requests, volunteers = [], height = '400px', s
           attribution='&copy; OpenStreetMap contributors'
         />
 
-        {DISTRICT_ZONES.map((zone) => (
+        {zoneLoad.map((zone) => (
           <Polygon
             key={zone.name}
             positions={zone.points}
-            pathOptions={{ color: '#1e40af', weight: 1.5, fillOpacity: 0.03 }}
+            pathOptions={{
+              color: zone.count > 4 ? '#b91c1c' : zone.count > 1 ? '#1d4ed8' : '#334155',
+              weight: zone.count > 0 ? 2.4 : 1.4,
+              fillColor: zone.count > 4 ? '#fee2e2' : '#dbeafe',
+              fillOpacity: zone.count > 0 ? 0.16 : 0.05,
+            }}
           >
             <Tooltip permanent direction="center" opacity={0.85}>
-              {zone.name}
+              {zone.name} {zone.count > 0 ? `(${zone.count} active)` : ''}
             </Tooltip>
           </Polygon>
+        ))}
+
+        {zoneLoad.filter((zone) => zone.count > 0).map((zone) => (
+          <Circle
+            key={`zone-active-${zone.name}`}
+            center={zone.center}
+            radius={1800 + zone.count * 220}
+            pathOptions={{
+              color: 'transparent',
+              fillColor: zone.count > 4 ? '#f97316' : '#2563eb',
+              fillOpacity: 0.09,
+            }}
+          />
         ))}
 
         {showHeatmap && requests.map((r) => {
@@ -139,11 +167,11 @@ export default function MapView({ requests, volunteers = [], height = '400px', s
           <Circle
             key={`heat-${r.id}`}
             center={[r.lat, r.lng]}
-            radius={950}
+            radius={1450}
             pathOptions={{
               color: 'transparent',
               fillColor: PRIORITY_COLORS[level],
-              fillOpacity: 0.32,
+              fillOpacity: 0.38,
             }}
           />
         );})}
@@ -183,12 +211,21 @@ export default function MapView({ requests, volunteers = [], height = '400px', s
           return (
             <Fragment key={`route-wrap-${request.id}`}>
               <Polyline
+                key={`route-base-${request.id}`}
+                positions={[from, to]}
+                pathOptions={{
+                  color: '#f8fafc',
+                  weight: 8,
+                  opacity: 0.85,
+                }}
+              />
+              <Polyline
                 key={`route-${request.id}`}
                 positions={[from, to]}
                 pathOptions={{
                   color: '#1d4ed8',
-                  weight: 3,
-                  opacity: 0.85,
+                  weight: 5,
+                  opacity: 0.95,
                   dashArray: `${10 + (tick % 2) * 4} ${8 + (tick % 2) * 3}`,
                 }}
               />
@@ -205,11 +242,11 @@ export default function MapView({ requests, volunteers = [], height = '400px', s
           <Circle
             key={cluster.id}
             center={[cluster.lat, cluster.lng]}
-            radius={900}
+            radius={1200}
             pathOptions={{
               color: '#0b3c5d',
               fillColor: '#0b3c5d',
-              fillOpacity: 0.15,
+              fillOpacity: 0.2,
               weight: 1,
             }}
           >

@@ -1,4 +1,4 @@
-export type RequestCategory = 'food' | 'medical' | 'rescue' | 'shelter';
+export type RequestCategory = 'food' | 'medical' | 'rescue' | 'shelter' | 'baby_care' | 'women_care' | 'water' | 'emergency_help';
 export type RequestStatus = 'pending' | 'assigned' | 'completed';
 
 export interface HelpRequest {
@@ -7,6 +7,7 @@ export interface HelpRequest {
   phone: string;
   category: RequestCategory;
   status: RequestStatus;
+  executionStatus?: 'pending' | 'assigned' | 'on_the_way' | 'completed';
   people: number;
   location: string;
   zone: string;
@@ -25,9 +26,13 @@ export interface HelpRequest {
   resourcesNeeded?: {
     food_packets?: number;
     water_liters?: number;
+    water_supply?: number;
     medicine_kits?: number;
     shelter_units?: number;
+    baby_care_kits?: number;
+    women_care_kits?: number;
     rescue_boats?: number;
+    emergency_essentials?: number;
   };
 }
 

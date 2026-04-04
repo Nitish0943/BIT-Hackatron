@@ -10,8 +10,11 @@ export async function POST(request: NextRequest) {
     '1': 'food',
     '2': 'medical',
     '3': 'rescue',
-    '4': 'water',
-    '5': 'shelter',
+    '4': 'shelter',
+    '5': 'baby_care',
+    '6': 'women_care',
+    '7': 'water',
+    '8': 'emergency_help',
   };
 
   const category = categoryMap[digit] ?? 'food';
@@ -31,14 +34,17 @@ export async function GET() {
     status: 'active',
     endpoints: {
       post: 'POST /api/ivr – Receive IVR digit press',
-      format: '{ phone: string, digit: "1"|"2"|"3"|"4"|"5" }',
+      format: '{ phone: string, digit: "1"|"2"|"3"|"4"|"5"|"6"|"7"|"8" }',
     },
     digitMap: {
       '1': 'Food',
       '2': 'Medical',
       '3': 'Rescue',
-      '4': 'Water',
-      '5': 'Shelter',
+      '4': 'Shelter',
+      '5': 'Baby Care',
+      '6': 'Women Care',
+      '7': 'Water',
+      '8': 'Emergency Help',
     },
   });
 }
