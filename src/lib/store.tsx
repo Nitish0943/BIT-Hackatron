@@ -4,11 +4,14 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useS
 import {
   assignVolunteer,
   completeRequest,
+  createBroadcastAlert,
   createRequest as createRequestApi,
   getDashboard,
+  setVolunteerStatus,
   updatePriority,
 } from './api';
 import { DashboardData, FALLBACK_DASHBOARD, HelpRequest } from './mockData';
+import { getUser as getAuthUser, login as authLogin, logout as authLogout } from './auth';
 
 export type UserRole = 'citizen' | 'volunteer' | 'government' | null;
 
@@ -46,7 +49,10 @@ interface AppContextValue {
   assignRequest: (requestId: string, volunteerId: string) => Promise<void>;
   completeRequestById: (requestId: string) => Promise<void>;
   changePriority: (requestId: string, priority: number) => Promise<void>;
-  broadcastAlert: (message: string) => void;
+  broadcastAlert: (message: string) => Promise<void>;
+  setVolunteerAvailability: (volunteerId: string, availability: 'available' | 'busy' | 'inactive') => Promise<void>;
+  isAssigningRequest: (requestId: string) => boolean;
+  isMutating: boolean;
   toggleOnline: (value: boolean) => void;
   syncPending: () => Promise<void>;
 }
@@ -63,6 +69,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [isOnline, setIsOnline] = useState(true);
   const [pendingQueue, setPendingQueue] = useState<CreatePayload[]>([]);
   const [user, setUser] = useState<SessionUser>({ role: null, name: '', phone: '' });
+  const [assigningRequestIds, setAssigningRequestIds] = useState<string[]>([]);
+  const [isMutating, setIsMutating] = useState(false);
 
   const refreshDashboard = useCallback(async () => {
     try {
@@ -85,8 +93,20 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const savedUser = localStorage.getItem(USER_KEY);
     if (savedUser) {
       setUser(JSON.parse(savedUser));
+    } else {
+      const authUser = getAuthUser();
+      if (authUser.role) {
+        setUser({ role: authUser.role, name: authUser.name, phone: '' });
+      }
     }
     refreshDashboard();
+  }, [refreshDashboard]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      void refreshDashboard();
+    }, 3000);
+    return () => window.clearInterval(timer);
   }, [refreshDashboard]);
 
   useEffect(() => {
@@ -103,33 +123,68 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setPendingQueue((prev) => [payload, ...prev]);
         return null;
       }
-      const req = await createRequestApi(payload);
-      await refreshDashboard();
-      return req;
+      setIsMutating(true);
+      try {
+        const req = await createRequestApi(payload);
+        await refreshDashboard();
+        return req;
+      } finally {
+        setIsMutating(false);
+      }
     },
     [isOnline, refreshDashboard],
   );
 
   const assignRequest = useCallback(
     async (requestId: string, volunteerId: string) => {
-      await assignVolunteer({ request_id: requestId, volunteer_id: volunteerId });
-      await refreshDashboard();
+      setAssigningRequestIds((prev) => (prev.includes(requestId) ? prev : [...prev, requestId]));
+      setIsMutating(true);
+      try {
+        await assignVolunteer({ request_id: requestId, volunteer_id: volunteerId });
+        await refreshDashboard();
+      } finally {
+        setAssigningRequestIds((prev) => prev.filter((id) => id !== requestId));
+        setIsMutating(false);
+      }
     },
     [refreshDashboard],
   );
 
   const completeRequestById = useCallback(
     async (requestId: string) => {
-      await completeRequest({ request_id: requestId });
-      await refreshDashboard();
+      setIsMutating(true);
+      try {
+        await completeRequest({ request_id: requestId });
+        await refreshDashboard();
+      } finally {
+        setIsMutating(false);
+      }
     },
     [refreshDashboard],
   );
 
   const changePriority = useCallback(
     async (requestId: string, priority: number) => {
-      await updatePriority({ request_id: requestId, priority });
-      await refreshDashboard();
+      setIsMutating(true);
+      try {
+        await updatePriority({ request_id: requestId, priority });
+        await refreshDashboard();
+      } finally {
+        setIsMutating(false);
+      }
+    },
+    [refreshDashboard],
+  );
+
+  const setVolunteerAvailability = useCallback(
+    async (volunteerId: string, availability: 'available' | 'busy' | 'inactive') => {
+      setIsMutating(true);
+      try {
+        await setVolunteerStatus({ volunteer_id: volunteerId, availability });
+        await refreshDashboard();
+      } finally {
+        setIsMutating(false);
+      }
     },
     [refreshDashboard],
   );
@@ -143,19 +198,47 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     await refreshDashboard();
   }, [isOnline, pendingQueue, refreshDashboard]);
 
-  const broadcastAlert = useCallback((message: string) => {
-    if (!message.trim()) return;
-    setDashboard((prev) => ({
-      ...prev,
-      alerts: [message.trim(), ...prev.alerts].slice(0, 15),
-    }));
-  }, []);
+  useEffect(() => {
+    if (isOnline && pendingQueue.length > 0) {
+      void syncPending();
+    }
+  }, [isOnline, pendingQueue.length, syncPending]);
+
+  const broadcastAlert = useCallback(async (message: string) => {
+    const normalized = message.trim();
+    if (!normalized) return;
+    setIsMutating(true);
+    try {
+      const response = await createBroadcastAlert({ message: normalized, channels: ['sms', 'ivr', 'whatsapp'] });
+      setDashboard((prev) => ({
+        ...prev,
+        alerts: [response.feed, ...prev.alerts].slice(0, 20),
+      }));
+      await refreshDashboard();
+    } catch {
+      setDashboard((prev) => ({
+        ...prev,
+        alerts: [`${normalized} | Message queued locally`, ...prev.alerts].slice(0, 20),
+      }));
+    } finally {
+      setIsMutating(false);
+    }
+  }, [refreshDashboard]);
+
+  const isAssigningRequest = useCallback(
+    (requestId: string) => assigningRequestIds.includes(requestId),
+    [assigningRequestIds],
+  );
 
   const login = useCallback((nextUser: SessionUser) => {
+    if (nextUser.role) {
+      authLogin(nextUser.role, nextUser.name);
+    }
     setUser(nextUser);
   }, []);
 
   const logout = useCallback(() => {
+    authLogout();
     setUser({ role: null, name: '', phone: '' });
     localStorage.removeItem(USER_KEY);
   }, []);
@@ -184,6 +267,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         completeRequestById,
         changePriority,
         broadcastAlert,
+        setVolunteerAvailability,
+        isAssigningRequest,
+        isMutating,
         toggleOnline: setIsOnline,
         syncPending,
       }}

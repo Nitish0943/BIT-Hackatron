@@ -4,6 +4,12 @@ import { useState } from 'react';
 import { useApp } from '@/lib/store';
 import { Phone, MessageSquare, Zap, Cpu, CheckCircle } from 'lucide-react';
 import { ivrCodeToCategory, parseWhatsAppMessage } from '@/lib/aiLogic';
+import {
+  createDroneRequest,
+  createIvrRequest,
+  createMissedCallRequest,
+  createWhatsAppRequest,
+} from '@/lib/api';
 
 const TABS = [
   { id: 'ivr', label: 'IVR System', icon: Phone },
@@ -12,7 +18,14 @@ const TABS = [
   { id: 'drone', label: 'Drone AI', icon: Cpu },
 ];
 
-const MOCK_DRONE_DETECTIONS = [
+const MOCK_DRONE_DETECTIONS: Array<{
+  id: string;
+  lat: number;
+  lng: number;
+  persons: number;
+  flag: 'red' | 'yellow' | 'green';
+  area: string;
+}> = [
   { id: 'D001', lat: 13.085, lng: 80.272, persons: 6, flag: 'red', area: 'Zone A - North' },
   { id: 'D002', lat: 13.092, lng: 80.261, persons: 3, flag: 'yellow', area: 'Zone B - East' },
   { id: 'D003', lat: 13.075, lng: 80.283, persons: 11, flag: 'red', area: 'Zone C - South' },
@@ -21,7 +34,7 @@ const MOCK_DRONE_DETECTIONS = [
 ];
 
 export default function MultiChannelPanel() {
-  const { createRequest } = useApp();
+  const { refreshDashboard } = useApp();
   const [activeTab, setActiveTab] = useState('ivr');
   const [ivrPhone, setIvrPhone] = useState('');
   const [ivrLog, setIvrLog] = useState<string[]>([]);
@@ -33,30 +46,18 @@ export default function MultiChannelPanel() {
 
   // IVR: Simulate digit press
   const handleIVR = async (digit: string) => {
-    if (!ivrPhone) { setIvrLog(l => [`⚠️ Enter a phone number first`, ...l]); return; }
+    if (!ivrPhone) return;
     const category = ivrCodeToCategory(digit);
-    const req = await createRequest({
-      name: 'IVR Caller',
-      phone: ivrPhone,
-      category,
-      people: 1,
-      location: 'Ranchi - IVR Input',
-      zone: 'Ranchi',
-    });
+    const req = await createIvrRequest({ phone: ivrPhone, digit, location: 'Ranchi - IVR Input', zone: 'Ranchi' });
+    void refreshDashboard();
     setIvrLog(l => [`✅ ${req?.id ?? 'QUEUED'} | Category: ${category} | Ph: ${ivrPhone}`, ...l.slice(0, 9)]);
   };
 
   // Missed Call simulation
   const handleMissedCall = async () => {
     const phone = `98${Math.floor(10000000 + Math.random() * 90000000)}`;
-    const req = await createRequest({
-      name: 'Unknown Caller',
-      phone,
-      category: 'rescue',
-      people: 1,
-      location: 'Dhanbad - Missed Call Signal',
-      zone: 'Dhanbad',
-    });
+    const req = await createMissedCallRequest({ phone, location: 'Dhanbad - Missed Call Signal', zone: 'Dhanbad' });
+    void refreshDashboard();
     setMissedLog(l => [`📲 ${req?.id ?? 'QUEUED'} | Missed Call from ${phone} – Auto-tagged Rescue`, ...l.slice(0, 9)]);
   };
 
@@ -66,14 +67,8 @@ export default function MultiChannelPanel() {
     const category = parseWhatsAppMessage(waMessage) ?? 'food';
     const numMatch = waMessage.match(/\d+/);
     const familySize = numMatch ? Math.min(parseInt(numMatch[0]), 20) : 1;
-    const req = await createRequest({
-      name: 'WhatsApp User',
-      phone: waPhone,
-      category,
-      people: familySize,
-      location: 'Jamshedpur - WhatsApp Input',
-      zone: 'Jamshedpur',
-    });
+    const req = await createWhatsAppRequest({ phone: waPhone, message: waMessage, location: 'Jamshedpur - WhatsApp Input', zone: 'Jamshedpur' });
+    void refreshDashboard();
     setWaLog(l => [`✅ ${req?.id ?? 'QUEUED'} | "${waMessage}" → ${category} for ${familySize}`, ...l.slice(0, 9)]);
     setWaMessage('');
   };
@@ -81,14 +76,16 @@ export default function MultiChannelPanel() {
   // Drone: convert detection to request
   const convertDroneDetection = (d: typeof MOCK_DRONE_DETECTIONS[0]) => {
     if (droneConverted.includes(d.id)) return;
-    void createRequest({
-      name: `Drone Target ${d.id}`,
-      phone: '0000000000',
-      category: d.flag === 'red' ? 'rescue' : 'food',
-      people: d.persons,
-      location: d.area,
+    void createDroneRequest({
+      id: d.id,
+      lat: d.lat,
+      lng: d.lng,
+      persons: d.persons,
+      flag: d.flag,
+      area: d.area,
       zone: d.area.includes('North') ? 'Ranchi' : d.area.includes('East') ? 'Dhanbad' : 'Jamshedpur',
     });
+    void refreshDashboard();
     setDroneConverted(prev => [...prev, d.id]);
   };
 

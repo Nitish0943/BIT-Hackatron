@@ -19,7 +19,6 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       </head>
       <body className={inter.className}>
         <AppProvider>
-          <div className="gov-top-strip">Government of India | Ministry of Home Affairs | NDMA</div>
           <Navbar />
           <main className="min-h-screen">{children}</main>
         </AppProvider>

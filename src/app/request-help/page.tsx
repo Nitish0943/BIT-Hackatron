@@ -6,11 +6,15 @@ import { useApp } from '@/lib/store';
 import OfflineBanner from '@/components/OfflineBanner';
 
 const CATEGORIES = [
-  { id: 'food', label: 'Food' },
-  { id: 'medical', label: 'Medical' },
-  { id: 'rescue', label: 'Rescue' },
-  { id: 'shelter', label: 'Shelter' },
+  { id: 'food', label: '🍞 Food', tone: 'bg-green-50 border-green-200 text-green-700' },
+  { id: 'medical', label: '💊 Medical', tone: 'bg-red-50 border-red-200 text-red-700' },
+  { id: 'rescue', label: '🚑 Rescue', tone: 'bg-amber-50 border-amber-200 text-amber-700' },
+  { id: 'shelter', label: '🏠 Shelter', tone: 'bg-blue-50 border-blue-200 text-blue-700' },
 ] as const;
+
+function sourceLabel(source?: 'web' | 'ivr' | 'whatsapp' | 'missed_call' | 'drone') {
+  return (source || 'web').replace('_', ' ').toUpperCase();
+}
 
 function RequestHelpContent() {
   const params = useSearchParams();
@@ -18,81 +22,155 @@ function RequestHelpContent() {
   const router = useRouter();
   const { state, createRequest, toggleOnline } = useApp();
 
-  const [name, setName] = useState(state.user.name || '');
-  const [phone, setPhone] = useState(state.user.phone || '');
+  const [name, setName] = useState(state.user.name || 'Citizen User');
+  const [phone, setPhone] = useState(state.user.phone || localStorage.getItem('citizen_last_phone') || '');
   const [location, setLocation] = useState(state.user.location || 'Ranchi, Jharkhand');
-  const [people, setPeople] = useState(1);
+  const [people, setPeople] = useState(3);
   const [category, setCategory] = useState(initialCategory);
   const [requestId, setRequestId] = useState('');
   const [error, setError] = useState('');
+  const [locating, setLocating] = useState(false);
+
+  const pickPeople = [1, 2, 3, 5, 8, 12];
 
   const submit = async () => {
-    if (!name.trim() || !phone.trim() || !location.trim()) {
-      setError('Please fill all fields');
+    if (!phone.trim() || !location.trim()) {
+      setError('Phone and location are required.');
       return;
     }
+
     const result = await createRequest({
-      name: name.trim(),
+      name: name.trim() || 'Citizen User',
       phone: phone.trim(),
       category,
       people,
       location: location.trim(),
       zone: location.includes('Dhanbad') ? 'Dhanbad' : location.includes('Jamshedpur') ? 'Jamshedpur' : 'Ranchi',
     });
+
+    localStorage.setItem('citizen_last_phone', phone.trim());
+
     if (result) {
       setRequestId(result.id);
       setError('');
     } else {
-      setError('Saved offline. Sync when online.');
+      setError('Will send when network returns. Saved safely offline.');
     }
+  };
+
+  const detectLocation = () => {
+    if (!navigator.geolocation) {
+      setError('Location access not available in this browser.');
+      return;
+    }
+    setLocating(true);
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const { latitude, longitude } = position.coords;
+        setLocation(`Lat ${latitude.toFixed(4)}, Lng ${longitude.toFixed(4)}, Jharkhand`);
+        setLocating(false);
+      },
+      () => {
+        setError('Unable to detect location, please type manually.');
+        setLocating(false);
+      },
+      { timeout: 10000 },
+    );
   };
 
   if (requestId) {
     return (
       <div className="max-w-md mx-auto px-4 py-10">
-        <div className="gov-card p-6 text-center space-y-3">
-          <h1 className="gov-title text-2xl">Request Submitted</h1>
-          <p className="text-slate-600">Your request ID is:</p>
-          <p className="text-2xl font-bold text-[#0b3c5d]">{requestId}</p>
-          <button onClick={() => router.push(`/request-status?id=${requestId}`)} className="w-full px-4 py-2 rounded-md bg-[#0b3c5d] text-white">Track Status</button>
+        <div className="rounded-2xl border border-slate-200 shadow-sm bg-white p-6 text-center space-y-3">
+          <h1 className="text-2xl font-black text-[#0b3c5d]">Request Submitted</h1>
+          <p className="text-slate-600">Request ID</p>
+          <p className="text-2xl font-black text-[#0b3c5d]">{requestId}</p>
+          <p className="text-sm text-slate-600">Source: {sourceLabel('web')}</p>
+          <button onClick={() => router.push(`/request-status?id=${requestId}`)} className="w-full px-4 py-3 rounded-xl bg-[#0b3c5d] text-white font-semibold">Track Status</button>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="max-w-xl mx-auto px-4 py-8 space-y-4">
-      <div className="gov-card p-5">
-        <h1 className="gov-title text-xl">Request Emergency Help</h1>
-        <p className="text-sm text-slate-600 mt-1">Submit request to district command center.</p>
+    <div className="max-w-3xl mx-auto px-4 py-8 space-y-4">
+      <div className="rounded-2xl border border-slate-200 shadow-sm bg-white p-5">
+        <h1 className="text-3xl font-black text-[#0b3c5d]">Emergency Help Request</h1>
+        <p className="text-slate-600 mt-1">Simple 4-step emergency request flow.</p>
 
         <div className="flex items-center gap-2 mt-3">
-          <span className="text-xs text-slate-500">Online Mode</span>
-          <button onClick={() => toggleOnline(!state.isOnline)} className={`w-12 h-6 rounded-full ${state.isOnline ? 'bg-green-500' : 'bg-slate-400'}`}>
+          <span className="text-xs text-slate-500">Online Sync</span>
+          <button onClick={() => toggleOnline(!state.isOnline)} className={`w-12 h-6 rounded-full ${state.isOnline ? 'bg-green-500' : 'bg-slate-400'}`} aria-label="Toggle online mode">
             <div className={`h-5 w-5 rounded-full bg-white transition-transform ${state.isOnline ? 'translate-x-6' : 'translate-x-0.5'}`} />
           </button>
+          <span className={`text-xs font-semibold ${state.isOnline ? 'text-green-700' : 'text-amber-700'}`}>
+            {state.isOnline ? 'Connected' : 'Offline queue active'}
+          </span>
         </div>
       </div>
 
-      <div className="gov-card p-5 space-y-3">
-        <label className="text-sm font-medium text-slate-700">Category</label>
-        <div className="grid grid-cols-2 gap-2">
+      <div className="rounded-2xl border border-slate-200 shadow-sm bg-white p-5 space-y-4">
+        <div>
+          <div className="text-lg font-black text-[#0b3c5d]">Step 1: Select Help Type</div>
+          <div className="grid grid-cols-2 gap-3 mt-3">
           {CATEGORIES.map((c) => (
             <button
               key={c.id}
               onClick={() => setCategory(c.id)}
-              className={`px-3 py-2 rounded-md border ${category === c.id ? 'bg-[#0b3c5d] text-white border-[#0b3c5d]' : 'border-slate-300 text-slate-700'}`}
+              className={`px-4 py-5 rounded-xl border text-lg font-bold ${category === c.id ? 'bg-[#0b3c5d] text-white border-[#0b3c5d]' : c.tone}`}
             >
               {c.label}
             </button>
           ))}
+          </div>
         </div>
-        <input className="w-full border border-slate-300 rounded-md px-3 py-2" placeholder="Name" value={name} onChange={(e) => setName(e.target.value)} />
-        <input className="w-full border border-slate-300 rounded-md px-3 py-2" placeholder="Phone" value={phone} onChange={(e) => setPhone(e.target.value)} />
-        <input className="w-full border border-slate-300 rounded-md px-3 py-2" placeholder="Location" value={location} onChange={(e) => setLocation(e.target.value)} />
-        <input className="w-full border border-slate-300 rounded-md px-3 py-2" type="number" min={1} max={30} placeholder="People affected" value={people} onChange={(e) => setPeople(Number(e.target.value))} />
-        {error && <p className="text-sm text-amber-700">{error}</p>}
-        <button onClick={submit} className="w-full px-4 py-2 rounded-md bg-[#0b3c5d] text-white">Submit Request</button>
+
+        <div>
+          <div className="text-lg font-black text-[#0b3c5d]">Step 2: Basic Details</div>
+          <div className="grid md:grid-cols-2 gap-3 mt-3">
+            <input className="w-full border border-slate-300 rounded-xl px-4 py-3 text-base" placeholder="Name (optional)" value={name} onChange={(e) => setName(e.target.value)} />
+            <input className="w-full border border-slate-300 rounded-xl px-4 py-3 text-base" placeholder="Phone" value={phone} onChange={(e) => setPhone(e.target.value)} />
+          </div>
+          <div className="mt-3 grid md:grid-cols-[1fr_auto] gap-2">
+            <input className="w-full border border-slate-300 rounded-xl px-4 py-3 text-base" placeholder="Location" value={location} onChange={(e) => setLocation(e.target.value)} />
+            <button
+              onClick={detectLocation}
+              className="px-4 py-3 rounded-xl border border-slate-300 font-semibold text-slate-700 hover:bg-slate-50"
+            >
+              {locating ? 'Detecting...' : 'Auto Detect'}
+            </button>
+          </div>
+
+          <div className="mt-4">
+            <div className="text-sm font-semibold text-slate-700">Family Members</div>
+            <div className="grid grid-cols-6 gap-2 mt-2">
+              {pickPeople.map((count) => (
+                <button
+                  key={count}
+                  onClick={() => setPeople(count)}
+                  className={`py-2 rounded-lg font-semibold border ${people === count ? 'bg-[#0b3c5d] text-white border-[#0b3c5d]' : 'bg-white border-slate-300 text-slate-700'}`}
+                >
+                  {count}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <div className="text-lg font-black text-[#0b3c5d]">Step 3: Preview</div>
+          <div className="mt-2 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-base text-slate-700">
+            You requested <strong>{category.toUpperCase()}</strong> for <strong>{people}</strong> people.
+          </div>
+        </div>
+
+        <div>
+          <div className="text-lg font-black text-[#0b3c5d]">Step 4: Submit</div>
+          {error && <p className="text-sm text-amber-700 mt-1">{error}</p>}
+          <button onClick={submit} className="mt-3 w-full px-4 py-4 rounded-xl bg-[#c62828] hover:bg-[#a71f1f] text-white text-lg font-black">
+            🚨 SUBMIT EMERGENCY REQUEST
+          </button>
+        </div>
       </div>
 
       <OfflineBanner />

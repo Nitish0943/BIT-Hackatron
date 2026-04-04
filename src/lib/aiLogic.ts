@@ -29,6 +29,100 @@ export function priorityLevel(priority: number): 'high' | 'medium' | 'low' {
   return 'low';
 }
 
+export function priorityLabel(priority: number): 'Critical' | 'Medium' | 'Low' {
+  if (priority >= 60) return 'Critical';
+  if (priority >= 40) return 'Medium';
+  return 'Low';
+}
+
+export function explainPriority(request: HelpRequest): string {
+  const parts: string[] = [];
+  if (request.category === 'medical') parts.push('injury');
+  if (request.category === 'rescue') parts.push('rescue need');
+  if (request.category === 'shelter') parts.push('shelter shortage');
+  if (request.category === 'food') parts.push('food shortage');
+  parts.push(`${request.people} member${request.people > 1 ? 's' : ''}`);
+
+  const waitingHours = Math.max(0, Math.floor((Date.now() - new Date(request.createdAt).getTime()) / 3_600_000));
+  const waitingText = waitingHours > 0 ? `, waiting ${waitingHours}h` : '';
+  return `High priority due to ${parts.join(' + ')}${waitingText}.`;
+}
+
+export function mergeMessage(request: HelpRequest): string | null {
+  const merged = request.mergedCount ?? 1;
+  if (merged <= 1) return null;
+  return `Merged ${merged} nearby requests`;
+}
+
+export function resourceEstimate(request: HelpRequest): string {
+  if (request.resourceSummary) return request.resourceSummary;
+  switch (request.category) {
+    case 'medical':
+      return `Medicine kits needed: ${Math.max(1, Math.ceil(request.people / 2))} units`;
+    case 'rescue':
+      return `Rescue support needed for ${request.people} people`;
+    case 'shelter':
+      return `Shelter units needed: ${Math.max(1, Math.ceil(request.people / 4))}`;
+    default:
+      return `Food needed: ${request.people * 2} units`;
+  }
+}
+
+export function predictDemand(requests: HelpRequest[], category: RequestCategory, hours = 3): number {
+  const now = Date.now();
+  const windowMs = 3 * 3_600_000;
+  const recent = requests.filter((item) => item.category === category && now - new Date(item.createdAt).getTime() <= windowMs);
+  const hourlyRate = recent.length / 3;
+  return Math.max(1, Math.round(hourlyRate * hours));
+}
+
+export function requiredResources(requests: HelpRequest[]) {
+  return requests.reduce(
+    (acc, req) => {
+      const r = req.resourcesNeeded;
+      if (!r) {
+        if (req.category === 'food') acc.food += req.people * 2;
+        if (req.category === 'medical') acc.medicine += Math.max(1, Math.ceil(req.people / 2));
+        if (req.category === 'shelter') acc.shelter += Math.max(1, Math.ceil(req.people / 4));
+        return acc;
+      }
+      acc.food += r.food_packets ?? 0;
+      acc.medicine += r.medicine_kits ?? 0;
+      acc.shelter += r.shelter_units ?? 0;
+      return acc;
+    },
+    { food: 0, medicine: 0, shelter: 0 },
+  );
+}
+
+export function averageResponseMinutes(requests: HelpRequest[]): number {
+  const assigned = requests.filter((item) => item.status !== 'pending');
+  if (!assigned.length) return 0;
+  const totalMinutes = assigned.reduce((sum, req) => {
+    const elapsed = (Date.now() - new Date(req.createdAt).getTime()) / 60_000;
+    return sum + Math.max(1, elapsed);
+  }, 0);
+  return Math.round(totalMinutes / assigned.length);
+}
+
+export function demandTrendPoints(requests: HelpRequest[]) {
+  const now = Date.now();
+  const buckets = Array.from({ length: 8 }, (_, i) => ({
+    label: `${7 - i}h`,
+    count: 0,
+    start: now - (8 - i) * 3_600_000,
+    end: now - (7 - i) * 3_600_000,
+  }));
+
+  requests.forEach((req) => {
+    const ts = new Date(req.createdAt).getTime();
+    const bucket = buckets.find((b) => ts >= b.start && ts < b.end);
+    if (bucket) bucket.count += 1;
+  });
+
+  return buckets.map((b) => ({ label: b.label, count: b.count }));
+}
+
 export interface RequestCluster {
   id: string;
   lat: number;
@@ -69,10 +163,11 @@ export function clusterNearbyRequests(requests: HelpRequest[]): RequestCluster[]
 
 export function suggestNearestVolunteer(request: HelpRequest, volunteers: Volunteer[]): Volunteer | null {
   const available = volunteers.filter((vol) => vol.availability === 'available');
-  if (!available.length) return null;
+  const pool = available.length > 0 ? available : volunteers.filter((vol) => vol.availability !== 'inactive');
+  if (!pool.length) return null;
   let best: Volunteer | null = null;
   let bestDistance = Number.POSITIVE_INFINITY;
-  available.forEach((vol) => {
+  pool.forEach((vol) => {
     const distance = Math.sqrt((vol.lat - request.lat) ** 2 + (vol.lng - request.lng) ** 2);
     if (distance < bestDistance) {
       bestDistance = distance;
