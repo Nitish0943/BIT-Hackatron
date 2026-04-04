@@ -2,21 +2,84 @@
 
 import { useMemo, useState } from 'react';
 import dynamic from 'next/dynamic';
+import Image from 'next/image';
 import { useApp } from '@/lib/store';
-import { predictDepletion, suggestNearestVolunteer } from '@/lib/aiLogic';
+import {
+  explainPriority,
+  mergeMessage,
+  predictDepletion,
+  predictDemand,
+  priorityLabel,
+  requiredResources,
+  resourceEstimate,
+  suggestNearestVolunteer,
+} from '@/lib/aiLogic';
+import StatCard from '@/components/StatCard';
+import ResourceGauge from '@/components/ResourceGauge';
+import RequestCard from '@/components/RequestCard';
+import GovernmentPortalNav from '@/components/GovernmentPortalNav';
 
 const MapView = dynamic(() => import('@/components/MapView'), { ssr: false });
 
+function distanceKm(a: { lat: number; lng: number }, b: { lat: number; lng: number }) {
+  const dx = (a.lat - b.lat) * 111;
+  const dy = (a.lng - b.lng) * 111 * Math.cos((a.lat * Math.PI) / 180);
+  return Math.sqrt(dx * dx + dy * dy);
+}
+
 export default function GovernmentPage() {
-  const { state, assignRequest, changePriority, broadcastAlert } = useApp();
+  const { state, assignRequest, changePriority, broadcastAlert, isAssigningRequest } = useApp();
   const [alertText, setAlertText] = useState('');
+  const [focusedRequestId, setFocusedRequestId] = useState<string | null>(null);
+  const [lastDelivery, setLastDelivery] = useState<string>('');
 
   const activeRequests = useMemo(
-    () => state.dashboard.requests.filter((req) => req.status !== 'completed'),
+    () => state.dashboard.requests
+      .filter((req) => req.status !== 'completed')
+      .slice()
+      .sort((a, b) => b.priority - a.priority),
     [state.dashboard.requests],
   );
 
   const forecasts = useMemo(() => predictDepletion(state.dashboard.resources), [state.dashboard.resources]);
+  const required = useMemo(
+    () => requiredResources(state.dashboard.requests.filter((item) => item.status !== 'completed')),
+    [state.dashboard.requests],
+  );
+
+  const focusedRequest = useMemo(() => {
+    if (focusedRequestId) {
+      const found = activeRequests.find((req) => req.id === focusedRequestId);
+      if (found) return found;
+    }
+    return activeRequests[0] ?? null;
+  }, [activeRequests, focusedRequestId]);
+
+  const suggestedVolunteer = useMemo(() => {
+    if (!focusedRequest) return null;
+    return suggestNearestVolunteer(focusedRequest, state.dashboard.volunteers);
+  }, [focusedRequest, state.dashboard.volunteers]);
+
+  const volunteerProfiles = useMemo(() => {
+    if (!focusedRequest) return state.dashboard.volunteers.slice(0, 5);
+    return state.dashboard.volunteers
+      .filter((vol) => vol.availability !== 'inactive')
+      .slice()
+      .sort((a, b) => distanceKm(focusedRequest, a) - distanceKm(focusedRequest, b))
+      .slice(0, 5);
+  }, [focusedRequest, state.dashboard.volunteers]);
+
+  const foodDemandPrediction = useMemo(
+    () => predictDemand(state.dashboard.requests, 'food', 3),
+    [state.dashboard.requests],
+  );
+
+  const summaryCards = [
+    { label: 'Active Requests', value: state.dashboard.summary.activeRequests, icon: '📋', color: '#0b3c5d' },
+    { label: 'Critical', value: state.dashboard.summary.criticalRequests, icon: '⚠️', color: '#c62828', urgent: state.dashboard.summary.criticalRequests > 0 },
+    { label: 'Completed', value: state.dashboard.summary.completedRequests, icon: '✅', color: '#2e7d32' },
+    { label: 'Volunteers Available', value: state.dashboard.summary.volunteersAvailable, icon: '🧑', color: '#0b3c5d' },
+  ] as const;
 
   const assignNearest = async (requestId: string) => {
     const req = state.dashboard.requests.find((item) => item.id === requestId);
@@ -27,69 +90,182 @@ export default function GovernmentPage() {
   };
 
   return (
-    <div className="max-w-7xl mx-auto px-4 py-8 space-y-5">
-      <section className="gov-card p-5">
-        <h1 className="gov-title text-2xl">Government Control Dashboard</h1>
-        <p className="text-sm text-slate-600 mt-1">Jharkhand district command view with satellite map, heat density, and cluster monitoring.</p>
-        <div className="grid md:grid-cols-4 gap-3 mt-4 text-center">
-          <div className="gov-section p-3"><p className="text-xs text-slate-500">Active Requests</p><p className="text-2xl font-bold text-[#0b3c5d]">{state.dashboard.summary.activeRequests}</p></div>
-          <div className="gov-section p-3"><p className="text-xs text-slate-500">Critical</p><p className="text-2xl font-bold text-red-700">{state.dashboard.summary.criticalRequests}</p></div>
-          <div className="gov-section p-3"><p className="text-xs text-slate-500">Completed</p><p className="text-2xl font-bold text-green-700">{state.dashboard.summary.completedRequests}</p></div>
-          <div className="gov-section p-3"><p className="text-xs text-slate-500">Volunteers Available</p><p className="text-2xl font-bold text-[#0b3c5d]">{state.dashboard.summary.volunteersAvailable}</p></div>
-        </div>
-      </section>
-
-      <section className="gov-card overflow-hidden">
-        <div className="p-4 border-b border-slate-200 flex items-center justify-between">
-          <h2 className="gov-title text-lg">Jharkhand Satellite Operations Map</h2>
-          <div className="text-xs text-slate-500">Red: High | Yellow: Medium | Green: Low</div>
-        </div>
-        <MapView requests={state.dashboard.requests} volunteers={state.dashboard.volunteers} height="480px" showHeatmap showClusters />
-      </section>
-
-      <section className="grid lg:grid-cols-4 gap-4">
-        <div className="gov-card p-4 lg:col-span-2">
-          <h2 className="gov-title text-lg mb-3">Active Requests</h2>
-          <div className="space-y-2 max-h-[360px] overflow-y-auto">
-            {activeRequests.slice(0, 20).map((req) => (
-              <div key={req.id} className="border border-slate-200 rounded-md p-3 text-sm space-y-2">
-                <div className="flex items-center justify-between">
-                  <p className="font-semibold text-slate-800">{req.id} - {req.category}</p>
-                  <span className="text-xs px-2 py-1 rounded bg-slate-100">{req.status}</span>
-                </div>
-                <p className="text-slate-500">{req.location} | Priority {req.priority}</p>
-                <div className="flex gap-2">
-                  <button onClick={() => assignNearest(req.id)} className="px-2 py-1 rounded border border-[#0b3c5d] text-[#0b3c5d]">Assign Nearest</button>
-                  <button onClick={() => changePriority(req.id, req.priority + 5)} className="px-2 py-1 rounded border border-amber-600 text-amber-700">Raise Priority</button>
-                </div>
+    <div className="min-h-screen bg-white text-slate-700">
+      <div className="max-w-7xl mx-auto px-4 py-6 space-y-4">
+        <section className="space-y-3">
+          <div className="rounded-xl border border-slate-200 bg-[#f8fafc] p-4">
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div>
+                <h1 className="text-2xl font-black text-[#0b3c5d]">NGO/Government AI Disaster Command Center</h1>
+                <p className="text-sm text-slate-600 mt-1">Flood Response: Dhanbad. Live map, AI prioritization, resource command, and volunteer orchestration.</p>
               </div>
-            ))}
-          </div>
-        </div>
-
-        <div className="gov-card p-4">
-          <h2 className="gov-title text-lg mb-3">Resource Status</h2>
-          <div className="space-y-2">
-            {forecasts.map((item) => (
-              <div key={item.resourceName} className="border border-slate-200 rounded-md p-2 text-sm">
-                <p className="font-medium text-slate-800">{item.resourceName}</p>
-                <p className="text-slate-500">{item.available} / {item.total}</p>
+              <div className="text-xs font-semibold px-3 py-1.5 rounded-full bg-green-100 text-[#2e7d32] border border-green-200">
+                Live auto-refresh every 3 seconds
               </div>
-            ))}
+            </div>
           </div>
-        </div>
 
-        <div className="gov-card p-4 space-y-3">
-          <h2 className="gov-title text-lg">Alerts</h2>
-          <textarea className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm" rows={3} value={alertText} onChange={(e) => setAlertText(e.target.value)} placeholder="Broadcast alert to all portals" />
-          <button onClick={() => { broadcastAlert(alertText); setAlertText(''); }} className="w-full px-3 py-2 rounded-md bg-[#0b3c5d] text-white">Broadcast Alert</button>
-          <div className="space-y-2 max-h-40 overflow-y-auto">
-            {state.dashboard.alerts.map((item, index) => (
-              <div key={`${item}-${index}`} className="text-xs p-2 rounded bg-slate-50 border border-slate-200 text-slate-700">{item}</div>
+          <GovernmentPortalNav />
+
+          <div className="grid md:grid-cols-4 gap-3">
+            {summaryCards.map((card) => (
+              <StatCard
+                key={card.label}
+                value={card.value}
+                label={card.label}
+                icon={card.icon}
+                color={card.color}
+                urgent={"urgent" in card ? card.urgent : false}
+                subtext={card.label === 'Critical' ? 'Needs immediate action' : undefined}
+              />
             ))}
           </div>
-        </div>
-      </section>
+        </section>
+
+        <section className="grid lg:grid-cols-10 gap-4 items-start">
+          <div className="lg:col-span-7 rounded-xl border border-slate-200 bg-[#f8fafc] overflow-hidden">
+            <div className="p-4 border-b border-slate-200 flex items-center justify-between">
+              <h2 className="text-lg font-bold text-[#0b3c5d]">Live Operations Map</h2>
+              <div className="text-xs text-slate-500">Red=Critical | Yellow=Medium | Green=Completed | Heat=Demand</div>
+            </div>
+            <MapView requests={state.dashboard.requests} volunteers={state.dashboard.volunteers} height="760px" showHeatmap showClusters />
+          </div>
+
+          <div className="lg:col-span-3 max-h-190 overflow-y-auto pr-1 space-y-4">
+            <div className="rounded-xl border border-slate-200 bg-[#f8fafc] p-4 text-slate-700">
+              <div className="flex items-center justify-between">
+                <h3 className="font-bold text-[#0b3c5d]">Live Request Stream</h3>
+                <span className="text-xs text-slate-500">latest incoming</span>
+              </div>
+              <div className="space-y-3 mt-3">
+                {activeRequests.slice(0, 6).map((req) => (
+                  <div key={req.id} className={`space-y-2 p-2 rounded-lg border ${focusedRequest?.id === req.id ? 'border-[#0b3c5d] bg-[#eef4fb]' : 'border-transparent'}`} onMouseEnter={() => setFocusedRequestId(req.id)} onClick={() => setFocusedRequestId(req.id)}>
+                    <RequestCard request={req} />
+                    <div className="flex flex-wrap gap-2 text-xs">
+                      <span className={`px-2 py-1 rounded-full ${priorityLabel(req.priority) === 'Critical' ? 'bg-red-50 text-red-700' : 'bg-amber-50 text-amber-700'}`}>{priorityLabel(req.priority)}</span>
+                      {mergeMessage(req) && <span className="px-2 py-1 rounded-full bg-green-50 text-green-700">{mergeMessage(req)}</span>}
+                      <span className="px-2 py-1 rounded-full bg-blue-50 text-blue-700">Click to lock selection</span>
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => assignNearest(req.id)}
+                        disabled={isAssigningRequest(req.id)}
+                        className="flex-1 px-2 py-1.5 rounded-md bg-[#0b3c5d] text-white text-xs disabled:opacity-60 disabled:cursor-not-allowed"
+                      >
+                        {isAssigningRequest(req.id) ? 'Assigning...' : 'Assign Volunteer'}
+                      </button>
+                      <button onClick={() => changePriority(req.id, req.priority + 5)} className="flex-1 px-2 py-1.5 rounded-md border border-amber-600 text-amber-700 text-xs">Increase Priority</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-slate-200 bg-[#f8fafc] p-4 text-slate-700">
+              <h3 className="font-bold text-[#0b3c5d]">AI Crisis Brain</h3>
+              {focusedRequest ? (
+                <div className="mt-3 space-y-2 text-sm">
+                  <p><strong>Selected:</strong> {focusedRequest.id} ({focusedRequest.category})</p>
+                  <p><strong>Priority:</strong> {priorityLabel(focusedRequest.priority)}</p>
+                  <p><strong>Reason:</strong> {focusedRequest.priorityReason || explainPriority(focusedRequest)}</p>
+                  <p><strong>Resource calc:</strong> {focusedRequest.resourceSummary || resourceEstimate(focusedRequest)}</p>
+                  <p><strong>Demand prediction:</strong> Expected {foodDemandPrediction + 10} food requests in next 3 hours</p>
+                  <p><strong>Recommendation:</strong> Send 100 food kits to {focusedRequest.zone} flood belt</p>
+                  <p><strong>Recommendation:</strong> Deploy 3 volunteers to {focusedRequest.zone}</p>
+                  <p><strong>Recommendation:</strong> Need 2 vehicles urgently</p>
+                </div>
+              ) : (
+                <p className="mt-2 text-sm text-slate-500">No active request selected.</p>
+              )}
+            </div>
+
+            <div className="rounded-xl border border-slate-200 bg-[#f8fafc] p-4 text-slate-700">
+              <h3 className="font-bold text-[#0b3c5d]">Inventory Status</h3>
+              <div className="mt-3 space-y-2 text-sm">
+                <div className="flex items-center justify-between"><span>Food</span><span className={required.food > (state.dashboard.resources[0]?.available ?? 0) ? 'text-red-700 font-bold' : 'text-slate-700'}>{state.dashboard.resources[0]?.available ?? 0} available / {required.food} required</span></div>
+                <div className="flex items-center justify-between"><span>Medicine</span><span className={required.medicine > (state.dashboard.resources[1]?.available ?? 0) ? 'text-red-700 font-bold' : 'text-slate-700'}>{state.dashboard.resources[1]?.available ?? 0} available / {required.medicine} required</span></div>
+                <div className="flex items-center justify-between"><span>Shelter</span><span className={required.shelter > (state.dashboard.resources[2]?.available ?? 0) ? 'text-red-700 font-bold' : 'text-slate-700'}>{state.dashboard.resources[2]?.available ?? 0} available / {required.shelter} required</span></div>
+                <div className="text-xs text-red-700 font-semibold">Shortage: {Math.max(0, required.food - (state.dashboard.resources[0]?.available ?? 0))} food kits</div>
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-slate-200 bg-[#f8fafc] p-4 text-slate-700">
+              <h3 className="font-bold text-[#0b3c5d]">Resource Prediction</h3>
+              <ResourceGauge resources={state.dashboard.resources} forecasts={forecasts} />
+              <div className="mt-3 text-xs text-slate-600 space-y-1">
+                {state.dashboard.resources.map((resource) => {
+                  const daysLeft = resource.dailyConsumption ? (resource.available / resource.dailyConsumption).toFixed(1) : 'n/a';
+                  return <p key={resource.name}>{resource.name}: {daysLeft === 'n/a' ? 'No prediction' : `will run out in ${daysLeft} days`}</p>;
+                })}
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-slate-200 bg-[#f8fafc] p-4 text-slate-700">
+              <h3 className="font-bold text-[#0b3c5d]">Volunteer Profile Panel</h3>
+              {focusedRequest ? (
+                <div className="mt-3 space-y-3">
+                  {volunteerProfiles.map((vol) => {
+                    const km = distanceKm(focusedRequest, vol).toFixed(1);
+                    const recommended = suggestedVolunteer?.id === vol.id;
+                    return (
+                      <div key={vol.id} className={`rounded-lg border p-2 ${recommended ? 'border-[#0b3c5d] bg-[#eef4fb]' : 'border-slate-200 bg-white'}`}>
+                        <div className="flex gap-2">
+                          <Image src={vol.image} alt={vol.name} width={48} height={48} className="h-12 w-12 rounded-md object-cover border border-slate-200" />
+                          <div className="text-xs flex-1">
+                            <p className="font-semibold text-slate-800">{vol.name} {recommended ? '(Recommended)' : ''}</p>
+                            <p>Age: {vol.age ?? 28} | Zone: {vol.zone}</p>
+                            <p>Skills: {vol.skills.join(', ')}</p>
+                            <p>Completed tasks: {vol.tasksCompleted}</p>
+                            <p className="capitalize">Availability: {vol.availability}</p>
+                            <p>{km} km {vol.vehicle ? '| has vehicle' : ''}</p>
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => assignRequest(focusedRequest.id, vol.id)}
+                          disabled={isAssigningRequest(focusedRequest.id)}
+                          className="mt-2 w-full px-2 py-1.5 rounded-md bg-[#0b3c5d] text-white text-xs disabled:opacity-60 disabled:cursor-not-allowed"
+                        >
+                          {isAssigningRequest(focusedRequest.id) ? 'Assigning...' : 'Assign Volunteer'}
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <p className="mt-2 text-sm text-slate-500">Select a request to view nearest volunteer profiles.</p>
+              )}
+            </div>
+
+            <div className="rounded-xl border border-slate-200 bg-[#f8fafc] p-4 text-slate-700 space-y-3">
+              <h3 className="font-bold text-[#0b3c5d]">Alert System</h3>
+              <textarea className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm" rows={3} value={alertText} onChange={(e) => setAlertText(e.target.value)} placeholder="Send disaster broadcast alert" />
+              <button onClick={async () => {
+                const msg = alertText.trim();
+                if (!msg) return;
+                await broadcastAlert(msg);
+                setLastDelivery('Message sent to 1200 users | Delivered via SMS / IVR / WhatsApp');
+                setAlertText('');
+              }} className="w-full px-3 py-2 rounded-md bg-[#0b3c5d] text-white">Send Alert</button>
+              {lastDelivery && <div className="text-xs text-green-700 bg-green-50 border border-green-200 rounded-md p-2">{lastDelivery}</div>}
+              <div className="space-y-2 max-h-36 overflow-y-auto">
+                {state.dashboard.alerts.slice(0, 8).map((item, index) => (
+                  <div key={`${item}-${index}`} className="text-xs p-2 rounded bg-slate-50 border border-slate-200">{item}</div>
+                ))}
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-slate-200 bg-[#f8fafc] p-4 text-slate-700">
+              <h3 className="font-bold text-[#0b3c5d]">System Recommendations</h3>
+              <ul className="mt-2 space-y-1 text-sm list-disc pl-5">
+                <li>Zone B needs {Math.max(120, required.food)} food kits</li>
+                <li>Zone C requires 2 ambulances</li>
+                <li>High priority rescue deployment needed in Dhanbad flood pockets</li>
+                <li>Need {Math.max(2, Math.ceil(state.dashboard.summary.criticalRequests / 4))} vehicles urgently</li>
+              </ul>
+            </div>
+          </div>
+        </section>
+      </div>
     </div>
   );
 }

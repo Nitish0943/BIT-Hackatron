@@ -3,8 +3,11 @@
 :root {
   --navy: #0b3c5d;
   --bg: #ffffff;
-  --soft: #f3f5f7;
+  --soft: #f5f7fa;
   --line: #d9e0e6;
+  --danger: #d32f2f;
+  --success: #2e7d32;
+  --warn: #ed6c02;
 }
 
 * { box-sizing: border-box; }
