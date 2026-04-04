@@ -57,3 +57,20 @@ body {
   border-radius: 12px;
   overflow: hidden;
 }
+
+button {
+  transition: transform 140ms ease, box-shadow 180ms ease, opacity 180ms ease;
+}
+
+button:active {
+  transform: translateY(1px);
+}
+
+@keyframes statusFlash {
+  0% { box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.3); }
+  100% { box-shadow: 0 0 0 12px rgba(37, 99, 235, 0); }
+}
+
+.status-flash {
+  animation: statusFlash 900ms ease-out;
+}

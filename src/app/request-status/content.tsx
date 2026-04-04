@@ -7,8 +7,9 @@ import { HelpRequest } from '@/lib/mockData';
 import RequestCard from '@/components/RequestCard';
 import dynamic from 'next/dynamic';
 import Image from 'next/image';
-import { explainPriority, mergeMessage, priorityLabel, resourceEstimate } from '@/lib/aiLogic';
+import { REQUEST_CATEGORY_LABELS, explainPriority, mergeMessage, priorityLabel, resourceEstimate } from '@/lib/aiLogic';
 import { useApp } from '@/lib/store';
+import MissionTimeline from '@/components/MissionTimeline';
 
 const MapView = dynamic(() => import('@/components/MapView'), { ssr: false });
 
@@ -24,6 +25,13 @@ export default function RequestStatusContent() {
     if (status === 'completed') return 'bg-green-100 text-green-700';
     if (status === 'assigned') return 'bg-amber-100 text-amber-700';
     return 'bg-red-100 text-red-700';
+  };
+
+  const executionLabel = (status: string, executionStatus?: string) => {
+    if (status === 'completed' || executionStatus === 'completed') return 'Completed';
+    if (executionStatus === 'on_the_way') return 'On the way';
+    if (status === 'assigned' || executionStatus === 'assigned') return 'Assigned';
+    return 'Pending';
   };
 
   useEffect(() => {
@@ -87,7 +95,12 @@ export default function RequestStatusContent() {
       )}
 
       {searched && loading && (
-        <div className="rounded-2xl border border-slate-200 shadow-sm bg-white p-5 text-sm text-slate-600">Looking up the request...</div>
+        <div className="rounded-2xl border border-slate-200 shadow-sm bg-white p-5 text-sm text-slate-600">
+          <span className="inline-flex items-center gap-2">
+            <span className="h-2 w-2 rounded-full bg-blue-600 animate-ping" />
+            Looking up the request...
+          </span>
+        </div>
       )}
 
       {searched && result && (
@@ -99,10 +112,18 @@ export default function RequestStatusContent() {
               <h2 className="text-xl font-black text-[#0b3c5d]">Live Status</h2>
               <div className="flex flex-wrap gap-2">
                 <span className={`px-3 py-1 rounded-full text-xs font-semibold ${statusTone(result.status)}`}>{result.status.toUpperCase()}</span>
+                <span className="px-3 py-1 rounded-full text-xs font-semibold bg-blue-50 text-blue-700">Execution: {executionLabel(result.status, result.executionStatus)}</span>
                 <span className="px-3 py-1 rounded-full text-xs font-semibold bg-slate-100 text-slate-700">Source: {result.source ? result.source.replace('_', ' ').toUpperCase() : 'WEB'}</span>
+                <span className="px-3 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700">Category: {REQUEST_CATEGORY_LABELS[result.category]}</span>
               </div>
+              <MissionTimeline
+                requestId={result.id}
+                createdAt={result.createdAt}
+                status={result.status}
+                executionStatus={result.executionStatus}
+              />
               <p><strong>ETA:</strong> {result.eta ? `Help will arrive in ${result.eta}` : 'Help team assignment in progress'}</p>
-              <p><strong>On The Way:</strong> {result.status === 'assigned' ? 'Yes, volunteer is moving to your location' : 'Awaiting dispatch'}</p>
+              <p><strong>On The Way:</strong> {executionLabel(result.status, result.executionStatus) === 'On the way' ? 'Yes, volunteer is moving to your location' : 'Awaiting dispatch'}</p>
             </div>
 
             <div className="rounded-2xl border border-slate-200 shadow-sm bg-white overflow-hidden">
@@ -143,6 +164,7 @@ export default function RequestStatusContent() {
               <p><strong>Reason:</strong> {result.priorityReason || explainPriority(result)}</p>
               <p><strong>Resource calculation:</strong> {result.resourceSummary || resourceEstimate(result)}</p>
               <p><strong>Merge info:</strong> {mergeMessage(result) || 'No nearby merge yet'}</p>
+              <p><strong>Humanitarian stream:</strong> {result.category.replaceAll('_', ' ').toUpperCase()}</p>
             </div>
           </div>
         </div>

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import {
   assignVolunteer,
   completeRequest,
@@ -8,6 +8,7 @@ import {
   createRequest as createRequestApi,
   getDashboard,
   setVolunteerStatus,
+  startMission,
   updatePriority,
 } from './api';
 import { DashboardData, FALLBACK_DASHBOARD, HelpRequest } from './mockData';
@@ -25,11 +26,17 @@ export interface SessionUser {
 interface CreatePayload {
   name: string;
   phone: string;
-  category: 'food' | 'medical' | 'rescue' | 'shelter';
+  category: 'food' | 'medical' | 'rescue' | 'shelter' | 'baby_care' | 'women_care' | 'water' | 'emergency_help';
   people: number;
   location: string;
   zone: string;
 }
+
+type PendingAction =
+  | { type: 'assign'; requestId: string; volunteerId: string }
+  | { type: 'start'; requestId: string; volunteerId: string }
+  | { type: 'complete'; requestId: string }
+  | { type: 'volunteer_status'; volunteerId: string; availability: 'available' | 'busy' | 'inactive' };
 
 interface AppState {
   dashboard: DashboardData;
@@ -44,9 +51,10 @@ interface AppContextValue {
   state: AppState;
   login: (user: SessionUser) => void;
   logout: () => void;
-  refreshDashboard: () => Promise<void>;
+  refreshDashboard: (options?: { force?: boolean }) => Promise<void>;
   createRequest: (payload: CreatePayload) => Promise<HelpRequest | null>;
   assignRequest: (requestId: string, volunteerId: string) => Promise<void>;
+  startMissionById: (requestId: string, volunteerId: string) => Promise<void>;
   completeRequestById: (requestId: string) => Promise<void>;
   changePriority: (requestId: string, priority: number) => Promise<void>;
   broadcastAlert: (message: string) => Promise<void>;
@@ -58,6 +66,7 @@ interface AppContextValue {
 }
 
 const OFFLINE_KEY = 'sahayaknet_offline_queue';
+const ACTION_QUEUE_KEY = 'sahayaknet_offline_actions';
 const USER_KEY = 'sahayaknet_user';
 
 const AppContext = createContext<AppContextValue | null>(null);
@@ -68,27 +77,50 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [error, setError] = useState('');
   const [isOnline, setIsOnline] = useState(true);
   const [pendingQueue, setPendingQueue] = useState<CreatePayload[]>([]);
+  const [pendingActions, setPendingActions] = useState<PendingAction[]>([]);
   const [user, setUser] = useState<SessionUser>({ role: null, name: '', phone: '' });
   const [assigningRequestIds, setAssigningRequestIds] = useState<string[]>([]);
   const [isMutating, setIsMutating] = useState(false);
+  const refreshPromiseRef = useRef<Promise<void> | null>(null);
+  const lastRefreshAtRef = useRef(0);
 
-  const refreshDashboard = useCallback(async () => {
-    try {
-      setLoading(true);
-      const data = await getDashboard();
-      setDashboard(data);
-      setError('');
-    } catch (err) {
-      setError((err as Error).message || 'Unable to connect backend');
-    } finally {
-      setLoading(false);
+  const refreshDashboard = useCallback(async (options?: { force?: boolean }) => {
+    const force = Boolean(options?.force);
+    const now = Date.now();
+    const minInterval = 1200;
+
+    if (!force) {
+      if (refreshPromiseRef.current) return refreshPromiseRef.current;
+      if (now - lastRefreshAtRef.current < minInterval) return;
     }
+
+    const refreshPromise = (async () => {
+      try {
+        setLoading(true);
+        const data = await getDashboard();
+        setDashboard(data);
+        setError('');
+        lastRefreshAtRef.current = Date.now();
+      } catch (err) {
+        setError((err as Error).message || 'Unable to connect backend');
+      } finally {
+        setLoading(false);
+        refreshPromiseRef.current = null;
+      }
+    })();
+
+    refreshPromiseRef.current = refreshPromise;
+    await refreshPromise;
   }, []);
 
   useEffect(() => {
     const queued = localStorage.getItem(OFFLINE_KEY);
     if (queued) {
       setPendingQueue(JSON.parse(queued));
+    }
+    const actionQueue = localStorage.getItem(ACTION_QUEUE_KEY);
+    if (actionQueue) {
+      setPendingActions(JSON.parse(actionQueue));
     }
     const savedUser = localStorage.getItem(USER_KEY);
     if (savedUser) {
@@ -103,15 +135,37 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, [refreshDashboard]);
 
   useEffect(() => {
-    const timer = window.setInterval(() => {
-      void refreshDashboard();
-    }, 3000);
-    return () => window.clearInterval(timer);
+    let timer: number | undefined;
+
+    const getInterval = () => {
+      if (document.hidden) return 10000;
+      const connection = (navigator as Navigator & { connection?: { effectiveType?: string } }).connection;
+      const effectiveType = connection?.effectiveType;
+      if (effectiveType === 'slow-2g' || effectiveType === '2g') return 9000;
+      if (effectiveType === '3g') return 5000;
+      return 3000;
+    };
+
+    const schedule = () => {
+      timer = window.setTimeout(async () => {
+        await refreshDashboard();
+        schedule();
+      }, getInterval());
+    };
+
+    schedule();
+    return () => {
+      if (timer) window.clearTimeout(timer);
+    };
   }, [refreshDashboard]);
 
   useEffect(() => {
     localStorage.setItem(OFFLINE_KEY, JSON.stringify(pendingQueue));
   }, [pendingQueue]);
+
+  useEffect(() => {
+    localStorage.setItem(ACTION_QUEUE_KEY, JSON.stringify(pendingActions));
+  }, [pendingActions]);
 
   useEffect(() => {
     localStorage.setItem(USER_KEY, JSON.stringify(user));
@@ -126,7 +180,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setIsMutating(true);
       try {
         const req = await createRequestApi(payload);
-        await refreshDashboard();
+        await refreshDashboard({ force: true });
         return req;
       } finally {
         setIsMutating(false);
@@ -137,30 +191,82 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const assignRequest = useCallback(
     async (requestId: string, volunteerId: string) => {
+      if (!isOnline) {
+        setPendingActions((prev) => [...prev, { type: 'assign', requestId, volunteerId }]);
+        setDashboard((prev) => ({
+          ...prev,
+          requests: prev.requests.map((item) => item.id === requestId
+            ? {
+              ...item,
+              status: 'assigned',
+              executionStatus: 'assigned',
+              assignedVolunteerId: volunteerId,
+              assignedVolunteerName: prev.volunteers.find((vol) => vol.id === volunteerId)?.name || item.assignedVolunteerName,
+            }
+            : item),
+        }));
+        return;
+      }
+
       setAssigningRequestIds((prev) => (prev.includes(requestId) ? prev : [...prev, requestId]));
       setIsMutating(true);
       try {
         await assignVolunteer({ request_id: requestId, volunteer_id: volunteerId });
-        await refreshDashboard();
+        await refreshDashboard({ force: true });
       } finally {
         setAssigningRequestIds((prev) => prev.filter((id) => id !== requestId));
         setIsMutating(false);
       }
     },
-    [refreshDashboard],
+    [isOnline, refreshDashboard],
   );
 
-  const completeRequestById = useCallback(
-    async (requestId: string) => {
+  const startMissionById = useCallback(
+    async (requestId: string, volunteerId: string) => {
+      if (!isOnline) {
+        setPendingActions((prev) => [...prev, { type: 'start', requestId, volunteerId }]);
+        setDashboard((prev) => ({
+          ...prev,
+          requests: prev.requests.map((item) => item.id === requestId
+            ? { ...item, status: 'assigned', executionStatus: 'on_the_way' }
+            : item),
+        }));
+        return;
+      }
+
       setIsMutating(true);
       try {
-        await completeRequest({ request_id: requestId });
-        await refreshDashboard();
+        await startMission({ request_id: requestId, volunteer_id: volunteerId });
+        await refreshDashboard({ force: true });
       } finally {
         setIsMutating(false);
       }
     },
-    [refreshDashboard],
+    [isOnline, refreshDashboard],
+  );
+
+  const completeRequestById = useCallback(
+    async (requestId: string) => {
+      if (!isOnline) {
+        setPendingActions((prev) => [...prev, { type: 'complete', requestId }]);
+        setDashboard((prev) => ({
+          ...prev,
+          requests: prev.requests.map((item) => item.id === requestId
+            ? { ...item, status: 'completed', executionStatus: 'completed' }
+            : item),
+        }));
+        return;
+      }
+
+      setIsMutating(true);
+      try {
+        await completeRequest({ request_id: requestId });
+        await refreshDashboard({ force: true });
+      } finally {
+        setIsMutating(false);
+      }
+    },
+    [isOnline, refreshDashboard],
   );
 
   const changePriority = useCallback(
@@ -168,7 +274,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setIsMutating(true);
       try {
         await updatePriority({ request_id: requestId, priority });
-        await refreshDashboard();
+        await refreshDashboard({ force: true });
       } finally {
         setIsMutating(false);
       }
@@ -178,31 +284,59 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const setVolunteerAvailability = useCallback(
     async (volunteerId: string, availability: 'available' | 'busy' | 'inactive') => {
+      if (!isOnline) {
+        setPendingActions((prev) => [...prev, { type: 'volunteer_status', volunteerId, availability }]);
+        setDashboard((prev) => ({
+          ...prev,
+          volunteers: prev.volunteers.map((item) => item.id === volunteerId ? { ...item, availability } : item),
+        }));
+        return;
+      }
+
       setIsMutating(true);
       try {
         await setVolunteerStatus({ volunteer_id: volunteerId, availability });
-        await refreshDashboard();
+        await refreshDashboard({ force: true });
       } finally {
         setIsMutating(false);
       }
     },
-    [refreshDashboard],
+    [isOnline, refreshDashboard],
   );
 
   const syncPending = useCallback(async () => {
-    if (!isOnline || pendingQueue.length === 0) return;
-    for (const item of pendingQueue) {
-      await createRequestApi(item);
+    if (!isOnline) return;
+
+    if (pendingQueue.length > 0) {
+      for (const item of pendingQueue) {
+        await createRequestApi(item);
+      }
+      setPendingQueue([]);
     }
-    setPendingQueue([]);
-    await refreshDashboard();
-  }, [isOnline, pendingQueue, refreshDashboard]);
+
+    if (pendingActions.length > 0) {
+      for (const action of pendingActions) {
+        if (action.type === 'assign') {
+          await assignVolunteer({ request_id: action.requestId, volunteer_id: action.volunteerId });
+        } else if (action.type === 'start') {
+          await startMission({ request_id: action.requestId, volunteer_id: action.volunteerId });
+        } else if (action.type === 'complete') {
+          await completeRequest({ request_id: action.requestId });
+        } else if (action.type === 'volunteer_status') {
+          await setVolunteerStatus({ volunteer_id: action.volunteerId, availability: action.availability });
+        }
+      }
+      setPendingActions([]);
+    }
+
+    await refreshDashboard({ force: true });
+  }, [isOnline, pendingQueue, pendingActions, refreshDashboard]);
 
   useEffect(() => {
-    if (isOnline && pendingQueue.length > 0) {
+    if (isOnline && (pendingQueue.length > 0 || pendingActions.length > 0)) {
       void syncPending();
     }
-  }, [isOnline, pendingQueue.length, syncPending]);
+  }, [isOnline, pendingQueue.length, pendingActions.length, syncPending]);
 
   const broadcastAlert = useCallback(async (message: string) => {
     const normalized = message.trim();
@@ -214,7 +348,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         ...prev,
         alerts: [response.feed, ...prev.alerts].slice(0, 20),
       }));
-      await refreshDashboard();
+      await refreshDashboard({ force: true });
     } catch {
       setDashboard((prev) => ({
         ...prev,
@@ -264,6 +398,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         refreshDashboard,
         createRequest,
         assignRequest,
+        startMissionById,
         completeRequestById,
         changePriority,
         broadcastAlert,

@@ -143,7 +143,42 @@ export default function GovernmentAnalyticsPage() {
   }, [state.dashboard.requests]);
 
   const medicalTrend = state.dashboard.requests.filter((req) => req.category === 'medical' && req.status !== 'completed').length;
+  const babyTrend = state.dashboard.requests.filter((req) => req.category === 'baby_care' && req.status !== 'completed').length;
+  const womenTrend = state.dashboard.requests.filter((req) => req.category === 'women_care' && req.status !== 'completed').length;
+  const waterTrend = state.dashboard.requests.filter((req) => req.category === 'water' && req.status !== 'completed').length;
+  const emergencyTrend = state.dashboard.requests.filter((req) => req.category === 'emergency_help' && req.status !== 'completed').length;
   const responseImprovement = Math.max(4, Math.min(18, Math.round((completed / Math.max(1, total)) * 20)));
+
+  const categoryStats = useMemo(() => {
+    const counts: Record<string, number> = {};
+    state.dashboard.requests.forEach((request) => {
+      counts[request.category] = (counts[request.category] ?? 0) + 1;
+    });
+    return counts;
+  }, [state.dashboard.requests]);
+
+  const signalStrip = [
+    {
+      id: 'sig-water',
+      text: `${waterTrend >= 6 ? '⚠️' : '✔️'} Water ${waterTrend >= 6 ? 'critical' : 'stable'} (${waterTrend})`,
+      tone: waterTrend >= 6 ? 'border-red-200 bg-red-50 text-red-700' : 'border-emerald-200 bg-emerald-50 text-emerald-700',
+    },
+    {
+      id: 'sig-medical',
+      text: `${medicalTrend >= 6 ? '📈' : '✔️'} Medical ${medicalTrend >= 6 ? 'rising' : 'controlled'} (${medicalTrend})`,
+      tone: medicalTrend >= 6 ? 'border-amber-200 bg-amber-50 text-amber-700' : 'border-emerald-200 bg-emerald-50 text-emerald-700',
+    },
+    {
+      id: 'sig-food',
+      text: `${pending > completed ? '⚠️' : '✔️'} Ops ${pending > completed ? 'pending-heavy' : 'balanced'} (${pending}/${completed})`,
+      tone: pending > completed ? 'border-red-200 bg-red-50 text-red-700' : 'border-emerald-200 bg-emerald-50 text-emerald-700',
+    },
+    {
+      id: 'sig-emergency',
+      text: `${emergencyTrend >= 4 ? '⚠️' : '✔️'} Emergency ${emergencyTrend >= 4 ? 'high' : 'stable'} (${emergencyTrend})`,
+      tone: emergencyTrend >= 4 ? 'border-red-200 bg-red-50 text-red-700' : 'border-emerald-200 bg-emerald-50 text-emerald-700',
+    },
+  ] as const;
 
   const kpis = [
     {
@@ -203,6 +238,17 @@ export default function GovernmentAnalyticsPage() {
           </div>
         </div>
 
+        <div className="rounded-xl border border-slate-200 bg-white p-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="rounded-full bg-slate-900 px-2.5 py-1 text-[11px] font-semibold text-white">Prediction strip</span>
+            {signalStrip.map((signal) => (
+              <span key={signal.id} className={`rounded-full border px-3 py-1 text-xs font-semibold ${signal.tone}`}>
+                {signal.text}
+              </span>
+            ))}
+          </div>
+        </div>
+
         <div className="grid lg:grid-cols-3 gap-4">
           <div className="lg:col-span-2 rounded-xl border border-slate-200 overflow-hidden">
             <div className="bg-[#0f172a] text-white px-4 py-2 text-sm font-semibold">Demand Trend (Last 8 Hours)</div>
@@ -233,7 +279,7 @@ export default function GovernmentAnalyticsPage() {
           <div className="rounded-xl border border-slate-200 overflow-hidden">
             <div className="bg-[#0f172a] text-white px-4 py-2 text-sm font-semibold">Live Alerts Panel</div>
             <div className="p-3 bg-[#f8fafc] max-h-80 overflow-y-auto space-y-2">
-              {alerts.map((alert) => (
+              {alerts.slice(0, 3).map((alert) => (
                 <div
                   key={alert.id}
                   className={`rounded-md border p-2 text-xs ${alert.severity === 'critical' ? 'border-red-300 bg-red-50 text-red-700' : 'border-amber-300 bg-amber-50 text-amber-700'}`}
@@ -273,7 +319,8 @@ export default function GovernmentAnalyticsPage() {
             <div className="bg-[#0f172a] text-white px-4 py-2 text-sm font-semibold">AI Insights</div>
             <div className="p-3 bg-[#f8fafc] space-y-2 text-sm">
               <div className="rounded-md border border-slate-200 bg-white p-2">Most affected zone: <span className="font-semibold text-[#0b3c5d]">{mostAffectedZone}</span></div>
-              <div className="rounded-md border border-slate-200 bg-white p-2">Medical requests increasing rapidly ({medicalTrend} active)</div>
+              <div className="rounded-md border border-slate-200 bg-white p-2">Medical trend: {medicalTrend >= 6 ? 'Rising rapidly' : 'Controlled'} ({medicalTrend})</div>
+              <div className="rounded-md border border-slate-200 bg-white p-2">Care load: Baby {babyTrend} | Women {womenTrend} | Water {waterTrend} | Emergency {emergencyTrend}</div>
               <div className="rounded-md border border-slate-200 bg-white p-2">Response time improving by {responseImprovement}%</div>
               <div className="rounded-md border border-slate-200 bg-white p-2">Volunteer overload detected: {overloaded.length} volunteers</div>
             </div>
@@ -326,6 +373,12 @@ export default function GovernmentAnalyticsPage() {
               {overloaded.slice(0, 5).map((vol) => (
                 <div key={`over-${vol.id}`} className="rounded border border-amber-300 bg-amber-50 px-2 py-1 text-amber-800">
                   {vol.displayName} - {vol.tasksCompleted} tasks ({vol.statusLabel})
+                </div>
+              ))}
+              <div className="pt-2 font-semibold text-slate-700">Category mix</div>
+              {Object.entries(categoryStats).slice(0, 6).map(([category, count]) => (
+                <div key={category} className="rounded border border-slate-200 bg-white px-2 py-1 capitalize">
+                  {category.replaceAll('_', ' ')}: {count}
                 </div>
               ))}
             </div>

@@ -2,7 +2,6 @@
 
 import { useMemo, useState } from 'react';
 import dynamic from 'next/dynamic';
-import Image from 'next/image';
 import { useApp } from '@/lib/store';
 import {
   explainPriority,
@@ -20,12 +19,6 @@ import RequestCard from '@/components/RequestCard';
 import GovernmentPortalNav from '@/components/GovernmentPortalNav';
 
 const MapView = dynamic(() => import('@/components/MapView'), { ssr: false });
-
-function distanceKm(a: { lat: number; lng: number }, b: { lat: number; lng: number }) {
-  const dx = (a.lat - b.lat) * 111;
-  const dy = (a.lng - b.lng) * 111 * Math.cos((a.lat * Math.PI) / 180);
-  return Math.sqrt(dx * dx + dy * dy);
-}
 
 export default function GovernmentPage() {
   const { state, assignRequest, changePriority, broadcastAlert, isAssigningRequest } = useApp();
@@ -54,20 +47,6 @@ export default function GovernmentPage() {
     }
     return activeRequests[0] ?? null;
   }, [activeRequests, focusedRequestId]);
-
-  const suggestedVolunteer = useMemo(() => {
-    if (!focusedRequest) return null;
-    return suggestNearestVolunteer(focusedRequest, state.dashboard.volunteers);
-  }, [focusedRequest, state.dashboard.volunteers]);
-
-  const volunteerProfiles = useMemo(() => {
-    if (!focusedRequest) return state.dashboard.volunteers.slice(0, 5);
-    return state.dashboard.volunteers
-      .filter((vol) => vol.availability !== 'inactive')
-      .slice()
-      .sort((a, b) => distanceKm(focusedRequest, a) - distanceKm(focusedRequest, b))
-      .slice(0, 5);
-  }, [focusedRequest, state.dashboard.volunteers]);
 
   const foodDemandPrediction = useMemo(
     () => predictDemand(state.dashboard.requests, 'food', 3),
@@ -165,12 +144,12 @@ export default function GovernmentPage() {
               <h3 className="font-bold text-[#0b3c5d]">AI Crisis Brain</h3>
               {focusedRequest ? (
                 <div className="mt-3 space-y-2 text-sm">
-                  <p><strong>Selected:</strong> {focusedRequest.id} ({focusedRequest.category})</p>
+                  <p><strong>Selected:</strong> {focusedRequest.id} ({focusedRequest.category.replaceAll('_', ' ').toUpperCase()})</p>
                   <p><strong>Priority:</strong> {priorityLabel(focusedRequest.priority)}</p>
                   <p><strong>Reason:</strong> {focusedRequest.priorityReason || explainPriority(focusedRequest)}</p>
                   <p><strong>Resource calc:</strong> {focusedRequest.resourceSummary || resourceEstimate(focusedRequest)}</p>
-                  <p><strong>Demand prediction:</strong> Expected {foodDemandPrediction + 10} food requests in next 3 hours</p>
-                  <p><strong>Recommendation:</strong> Send 100 food kits to {focusedRequest.zone} flood belt</p>
+                  <p><strong>Demand prediction:</strong> Expected {foodDemandPrediction + 10} requests in next 3 hours</p>
+                  <p><strong>Recommendation:</strong> Send targeted supplies to {focusedRequest.zone} based on the selected request stream</p>
                   <p><strong>Recommendation:</strong> Deploy 3 volunteers to {focusedRequest.zone}</p>
                   <p><strong>Recommendation:</strong> Need 2 vehicles urgently</p>
                 </div>
@@ -182,10 +161,31 @@ export default function GovernmentPage() {
             <div className="rounded-xl border border-slate-200 bg-[#f8fafc] p-4 text-slate-700">
               <h3 className="font-bold text-[#0b3c5d]">Inventory Status</h3>
               <div className="mt-3 space-y-2 text-sm">
-                <div className="flex items-center justify-between"><span>Food</span><span className={required.food > (state.dashboard.resources[0]?.available ?? 0) ? 'text-red-700 font-bold' : 'text-slate-700'}>{state.dashboard.resources[0]?.available ?? 0} available / {required.food} required</span></div>
-                <div className="flex items-center justify-between"><span>Medicine</span><span className={required.medicine > (state.dashboard.resources[1]?.available ?? 0) ? 'text-red-700 font-bold' : 'text-slate-700'}>{state.dashboard.resources[1]?.available ?? 0} available / {required.medicine} required</span></div>
-                <div className="flex items-center justify-between"><span>Shelter</span><span className={required.shelter > (state.dashboard.resources[2]?.available ?? 0) ? 'text-red-700 font-bold' : 'text-slate-700'}>{state.dashboard.resources[2]?.available ?? 0} available / {required.shelter} required</span></div>
-                <div className="text-xs text-red-700 font-semibold">Shortage: {Math.max(0, required.food - (state.dashboard.resources[0]?.available ?? 0))} food kits</div>
+                {state.dashboard.resources.map((resource) => {
+                  const requiredValue = resource.name === 'Food Packets'
+                    ? required.food
+                    : resource.name === 'Medical Kits'
+                      ? required.medicine
+                      : resource.name === 'Shelter Units'
+                        ? required.shelter
+                        : resource.name === 'Baby Care Kits'
+                          ? required.babyCare
+                          : resource.name === 'Women Care Kits'
+                            ? required.womenCare
+                            : resource.name === 'Water Supply'
+                              ? required.water
+                              : required.emergency;
+                  const shortage = Math.max(0, requiredValue - resource.available);
+                  return (
+                    <div key={resource.name} className="flex items-center justify-between gap-2">
+                      <span>{resource.name}</span>
+                      <span className={requiredValue > resource.available ? 'text-red-700 font-bold' : 'text-slate-700'}>
+                        {resource.available} available / {requiredValue} required
+                        {shortage > 0 ? ` | shortage ${shortage}` : ''}
+                      </span>
+                    </div>
+                  );
+                })}
               </div>
             </div>
 
@@ -198,42 +198,6 @@ export default function GovernmentPage() {
                   return <p key={resource.name}>{resource.name}: {daysLeft === 'n/a' ? 'No prediction' : `will run out in ${daysLeft} days`}</p>;
                 })}
               </div>
-            </div>
-
-            <div className="rounded-xl border border-slate-200 bg-[#f8fafc] p-4 text-slate-700">
-              <h3 className="font-bold text-[#0b3c5d]">Volunteer Profile Panel</h3>
-              {focusedRequest ? (
-                <div className="mt-3 space-y-3">
-                  {volunteerProfiles.map((vol) => {
-                    const km = distanceKm(focusedRequest, vol).toFixed(1);
-                    const recommended = suggestedVolunteer?.id === vol.id;
-                    return (
-                      <div key={vol.id} className={`rounded-lg border p-2 ${recommended ? 'border-[#0b3c5d] bg-[#eef4fb]' : 'border-slate-200 bg-white'}`}>
-                        <div className="flex gap-2">
-                          <Image src={vol.image} alt={vol.name} width={48} height={48} className="h-12 w-12 rounded-md object-cover border border-slate-200" />
-                          <div className="text-xs flex-1">
-                            <p className="font-semibold text-slate-800">{vol.name} {recommended ? '(Recommended)' : ''}</p>
-                            <p>Age: {vol.age ?? 28} | Zone: {vol.zone}</p>
-                            <p>Skills: {vol.skills.join(', ')}</p>
-                            <p>Completed tasks: {vol.tasksCompleted}</p>
-                            <p className="capitalize">Availability: {vol.availability}</p>
-                            <p>{km} km {vol.vehicle ? '| has vehicle' : ''}</p>
-                          </div>
-                        </div>
-                        <button
-                          onClick={() => assignRequest(focusedRequest.id, vol.id)}
-                          disabled={isAssigningRequest(focusedRequest.id)}
-                          className="mt-2 w-full px-2 py-1.5 rounded-md bg-[#0b3c5d] text-white text-xs disabled:opacity-60 disabled:cursor-not-allowed"
-                        >
-                          {isAssigningRequest(focusedRequest.id) ? 'Assigning...' : 'Assign Volunteer'}
-                        </button>
-                      </div>
-                    );
-                  })}
-                </div>
-              ) : (
-                <p className="mt-2 text-sm text-slate-500">Select a request to view nearest volunteer profiles.</p>
-              )}
             </div>
 
             <div className="rounded-xl border border-slate-200 bg-[#f8fafc] p-4 text-slate-700 space-y-3">

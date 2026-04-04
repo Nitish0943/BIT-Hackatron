@@ -23,12 +23,16 @@ interface ResourceDraft {
   food: number;
   medical: number;
   rescueTools: number;
+  babyCare: number;
+  womenCare: number;
+  waterSupply: number;
+  emergencyEssentials: number;
 }
 
 interface DeliveryLog {
   id: string;
   volunteerName: string;
-  resource: 'Food Kits' | 'Medical Kits' | 'Rescue Tools';
+  resource: 'Food Kits' | 'Medical Kits' | 'Rescue Tools' | 'Baby Care Kits' | 'Women Care Kits' | 'Water Supply' | 'Emergency Essentials';
   quantity: number;
   at: string;
   requestId: string;
@@ -39,6 +43,10 @@ const CATEGORY_SKILL_HINTS: Record<string, string[]> = {
   medical: ['medical', 'doctor', 'first aid', 'emergency', 'cpr'],
   rescue: ['rescue', 'swimming', 'boat', 'navigation', 'rope'],
   shelter: ['coordination', 'driving', 'communication', 'logistics'],
+  baby_care: ['infant', 'baby', 'milk', 'care'],
+  women_care: ['hygiene', 'support', 'care', 'coordination'],
+  water: ['water', 'purification', 'distribution', 'logistics'],
+  emergency_help: ['incident', 'response', 'emergency', 'coordination'],
 };
 
 const INITIAL_VEHICLES: VehicleUnit[] = [
@@ -78,7 +86,7 @@ export default function GovernmentVolunteersPage() {
   const [activeByVolunteer, setActiveByVolunteer] = useState<Record<string, boolean>>({});
   const [vehicles, setVehicles] = useState<VehicleUnit[]>(INITIAL_VEHICLES);
   const [selectedVehicleId, setSelectedVehicleId] = useState('');
-  const [resourceDraft, setResourceDraft] = useState<ResourceDraft>({ food: 0, medical: 0, rescueTools: 0 });
+  const [resourceDraft, setResourceDraft] = useState<ResourceDraft>({ food: 0, medical: 0, rescueTools: 0, babyCare: 0, womenCare: 0, waterSupply: 0, emergencyEssentials: 0 });
   const [deliveryLogs, setDeliveryLogs] = useState<DeliveryLog[]>([]);
   const [showResourceHistory, setShowResourceHistory] = useState(false);
   const [notice, setNotice] = useState('');
@@ -99,12 +107,16 @@ export default function GovernmentVolunteersPage() {
   );
 
   const requestNeed = useMemo(() => {
-    if (!selectedRequest) return { food: 0, medical: 0, rescueTools: 0 };
+    if (!selectedRequest) return { food: 0, medical: 0, rescueTools: 0, babyCare: 0, womenCare: 0, waterSupply: 0, emergencyEssentials: 0 };
     const needed = selectedRequest.resourcesNeeded;
     return {
       food: needed?.food_packets ?? (selectedRequest.category === 'food' ? selectedRequest.people * 2 : 0),
       medical: needed?.medicine_kits ?? (selectedRequest.category === 'medical' ? Math.max(1, Math.ceil(selectedRequest.people / 2)) : 0),
       rescueTools: selectedRequest.category === 'rescue' ? Math.max(1, needed?.rescue_boats ?? 1) : 0,
+      babyCare: needed?.baby_care_kits ?? (selectedRequest.category === 'baby_care' ? Math.max(1, Math.ceil(selectedRequest.people / 2)) : 0),
+      womenCare: needed?.women_care_kits ?? (selectedRequest.category === 'women_care' ? Math.max(1, Math.ceil(selectedRequest.people / 2)) : 0),
+      waterSupply: (needed?.water_supply ?? needed?.water_liters ?? 0) || (selectedRequest.category === 'water' ? Math.max(4, selectedRequest.people * 4) : 0),
+      emergencyEssentials: needed?.emergency_essentials ?? (selectedRequest.category === 'emergency_help' ? Math.max(1, Math.ceil(selectedRequest.people / 2)) : 0),
     };
   }, [selectedRequest]);
 
@@ -142,7 +154,7 @@ export default function GovernmentVolunteersPage() {
   }, [selectedVolunteer, state.dashboard.requests]);
 
   const assignedResources = useMemo(() => {
-    if (!selectedRequest) return { food: 0, medical: 0, rescueTools: 0 };
+    if (!selectedRequest) return { food: 0, medical: 0, rescueTools: 0, babyCare: 0, womenCare: 0, waterSupply: 0, emergencyEssentials: 0 };
     return deliveryLogs
       .filter((log) => log.requestId === selectedRequest.id)
       .reduce(
@@ -150,9 +162,13 @@ export default function GovernmentVolunteersPage() {
           if (log.resource === 'Food Kits') acc.food += log.quantity;
           if (log.resource === 'Medical Kits') acc.medical += log.quantity;
           if (log.resource === 'Rescue Tools') acc.rescueTools += log.quantity;
+          if (log.resource === 'Baby Care Kits') acc.babyCare += log.quantity;
+          if (log.resource === 'Women Care Kits') acc.womenCare += log.quantity;
+          if (log.resource === 'Water Supply') acc.waterSupply += log.quantity;
+          if (log.resource === 'Emergency Essentials') acc.emergencyEssentials += log.quantity;
           return acc;
         },
-        { food: 0, medical: 0, rescueTools: 0 },
+        { food: 0, medical: 0, rescueTools: 0, babyCare: 0, womenCare: 0, waterSupply: 0, emergencyEssentials: 0 },
       );
   }, [deliveryLogs, selectedRequest]);
 
@@ -160,11 +176,16 @@ export default function GovernmentVolunteersPage() {
     food: Math.max(0, requestNeed.food - assignedResources.food),
     medical: Math.max(0, requestNeed.medical - assignedResources.medical),
     rescueTools: Math.max(0, requestNeed.rescueTools - assignedResources.rescueTools),
+    babyCare: Math.max(0, requestNeed.babyCare - assignedResources.babyCare),
+    womenCare: Math.max(0, requestNeed.womenCare - assignedResources.womenCare),
+    waterSupply: Math.max(0, requestNeed.waterSupply - assignedResources.waterSupply),
+    emergencyEssentials: Math.max(0, requestNeed.emergencyEssentials - assignedResources.emergencyEssentials),
   };
 
   const totalDelivered = deliveryLogs.reduce((sum, row) => sum + row.quantity, 0);
   const visibleVolunteers = filteredVolunteers.slice(0, 20);
   const historyRows = deliveryLogs.length ? deliveryLogs : MOCK_HISTORY;
+  const activeRequestLabel = selectedRequest?.category ? selectedRequest.category.replaceAll('_', ' ').toUpperCase() : 'NONE';
 
   const toggleActive = (volunteerId: string) => {
     setActiveByVolunteer((prev) => ({ ...prev, [volunteerId]: !(prev[volunteerId] ?? true) }));
@@ -180,6 +201,10 @@ export default function GovernmentVolunteersPage() {
     if (resourceDraft.food > 0) logs.push({ id: `LOG-${Date.now()}-F`, volunteerName, resource: 'Food Kits', quantity: resourceDraft.food, at: now, requestId });
     if (resourceDraft.medical > 0) logs.push({ id: `LOG-${Date.now()}-M`, volunteerName, resource: 'Medical Kits', quantity: resourceDraft.medical, at: now, requestId });
     if (resourceDraft.rescueTools > 0) logs.push({ id: `LOG-${Date.now()}-R`, volunteerName, resource: 'Rescue Tools', quantity: resourceDraft.rescueTools, at: now, requestId });
+    if (resourceDraft.babyCare > 0) logs.push({ id: `LOG-${Date.now()}-B`, volunteerName, resource: 'Baby Care Kits', quantity: resourceDraft.babyCare, at: now, requestId });
+    if (resourceDraft.womenCare > 0) logs.push({ id: `LOG-${Date.now()}-W`, volunteerName, resource: 'Women Care Kits', quantity: resourceDraft.womenCare, at: now, requestId });
+    if (resourceDraft.waterSupply > 0) logs.push({ id: `LOG-${Date.now()}-H`, volunteerName, resource: 'Water Supply', quantity: resourceDraft.waterSupply, at: now, requestId });
+    if (resourceDraft.emergencyEssentials > 0) logs.push({ id: `LOG-${Date.now()}-E`, volunteerName, resource: 'Emergency Essentials', quantity: resourceDraft.emergencyEssentials, at: now, requestId });
     if (logs.length > 0) setDeliveryLogs((prev) => [...logs, ...prev]);
   };
 
@@ -202,13 +227,17 @@ export default function GovernmentVolunteersPage() {
     await assignRequest(selectedRequestId, volunteerId);
 
     setNotice('🚨 Assignment successful. Resources will arrive in 3 hours.');
-    setResourceDraft({ food: 0, medical: 0, rescueTools: 0 });
+    setResourceDraft({ food: 0, medical: 0, rescueTools: 0, babyCare: 0, womenCare: 0, waterSupply: 0, emergencyEssentials: 0 });
   };
 
   const resourceRows = [
     { key: 'food', label: 'Food Kits', required: requestNeed.food, assigned: assignedResources.food, remaining: remainingResources.food },
     { key: 'medical', label: 'Medical Kits', required: requestNeed.medical, assigned: assignedResources.medical, remaining: remainingResources.medical },
     { key: 'rescue', label: 'Rescue Tools', required: requestNeed.rescueTools, assigned: assignedResources.rescueTools, remaining: remainingResources.rescueTools },
+    { key: 'babyCare', label: 'Baby Care Kits', required: requestNeed.babyCare, assigned: assignedResources.babyCare, remaining: remainingResources.babyCare },
+    { key: 'womenCare', label: 'Women Care Kits', required: requestNeed.womenCare, assigned: assignedResources.womenCare, remaining: remainingResources.womenCare },
+    { key: 'waterSupply', label: 'Water Supply', required: requestNeed.waterSupply, assigned: assignedResources.waterSupply, remaining: remainingResources.waterSupply },
+    { key: 'emergencyEssentials', label: 'Emergency Essentials', required: requestNeed.emergencyEssentials, assigned: assignedResources.emergencyEssentials, remaining: remainingResources.emergencyEssentials },
   ] as const;
 
   return (
@@ -298,7 +327,15 @@ export default function GovernmentVolunteersPage() {
                         <p className="font-semibold text-slate-800">Name: {selectedVolunteer.name}</p>
                         <p>Age: {selectedVolunteer.age ?? 28}</p>
                         <p>Zone: {selectedVolunteer.zone}</p>
-                        <p>Current task: {currentAssignedTask ? `${currentAssignedTask.id} (${currentAssignedTask.category})` : 'No active task'}</p>
+                        <p>Current task: {currentAssignedTask ? `${currentAssignedTask.id} (${currentAssignedTask.category.replaceAll('_', ' ').toUpperCase()})` : 'No active task'}</p>
+                        {selectedRequest && (
+                          <div className="mt-2 flex flex-wrap gap-1">
+                            <span className="rounded-full bg-slate-100 px-2 py-0.5 font-semibold text-slate-700">{activeRequestLabel}</span>
+                            {(selectedRequest.category === 'baby_care' || selectedRequest.category === 'women_care') && <span className="rounded-full bg-pink-50 px-2 py-0.5 font-semibold text-pink-700">Care priority</span>}
+                            {selectedRequest.category === 'water' && <span className="rounded-full bg-cyan-50 px-2 py-0.5 font-semibold text-cyan-700">Water run</span>}
+                            {selectedRequest.category === 'emergency_help' && <span className="rounded-full bg-slate-100 px-2 py-0.5 font-semibold text-slate-700">Emergency response</span>}
+                          </div>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -353,10 +390,14 @@ export default function GovernmentVolunteersPage() {
                           })}
                         </div>
 
-                        <div className="mt-2 grid grid-cols-3 gap-2">
+                        <div className="mt-2 grid grid-cols-2 gap-2 md:grid-cols-4">
                           <input type="number" min={0} value={resourceDraft.food} onChange={(e) => setResourceDraft((prev) => ({ ...prev, food: Number(e.target.value) || 0 }))} className="border border-slate-300 rounded px-2 py-1 text-xs" placeholder="Food" />
                           <input type="number" min={0} value={resourceDraft.medical} onChange={(e) => setResourceDraft((prev) => ({ ...prev, medical: Number(e.target.value) || 0 }))} className="border border-slate-300 rounded px-2 py-1 text-xs" placeholder="Medical" />
                           <input type="number" min={0} value={resourceDraft.rescueTools} onChange={(e) => setResourceDraft((prev) => ({ ...prev, rescueTools: Number(e.target.value) || 0 }))} className="border border-slate-300 rounded px-2 py-1 text-xs" placeholder="Rescue" />
+                          <input type="number" min={0} value={resourceDraft.babyCare} onChange={(e) => setResourceDraft((prev) => ({ ...prev, babyCare: Number(e.target.value) || 0 }))} className="border border-slate-300 rounded px-2 py-1 text-xs" placeholder="Baby" />
+                          <input type="number" min={0} value={resourceDraft.womenCare} onChange={(e) => setResourceDraft((prev) => ({ ...prev, womenCare: Number(e.target.value) || 0 }))} className="border border-slate-300 rounded px-2 py-1 text-xs" placeholder="Women" />
+                          <input type="number" min={0} value={resourceDraft.waterSupply} onChange={(e) => setResourceDraft((prev) => ({ ...prev, waterSupply: Number(e.target.value) || 0 }))} className="border border-slate-300 rounded px-2 py-1 text-xs" placeholder="Water" />
+                          <input type="number" min={0} value={resourceDraft.emergencyEssentials} onChange={(e) => setResourceDraft((prev) => ({ ...prev, emergencyEssentials: Number(e.target.value) || 0 }))} className="border border-slate-300 rounded px-2 py-1 text-xs" placeholder="Emergency" />
                         </div>
 
                         <button onClick={() => setShowResourceHistory(true)} className="mt-2 w-full px-2 py-1.5 rounded border border-[#0b3c5d] text-[#0b3c5d] text-xs">View Resource History</button>
@@ -384,7 +425,7 @@ export default function GovernmentVolunteersPage() {
                 <h3 className="text-base font-bold text-[#0b3c5d]">Resource History</h3>
                 <button onClick={() => setShowResourceHistory(false)} className="text-xs px-2 py-1 rounded border border-slate-300">Close</button>
               </div>
-              <div className="text-xs text-slate-600 mb-3">Total delivered: {totalDelivered} | Remaining need: {remainingResources.food + remainingResources.medical + remainingResources.rescueTools}</div>
+              <div className="text-xs text-slate-600 mb-3">Total delivered: {totalDelivered} | Remaining need: {remainingResources.food + remainingResources.medical + remainingResources.rescueTools + remainingResources.babyCare + remainingResources.womenCare + remainingResources.waterSupply + remainingResources.emergencyEssentials}</div>
               <div className="overflow-x-auto rounded border border-slate-200">
                 <table className="w-full text-xs bg-white">
                   <thead className="bg-slate-50 text-slate-700">
