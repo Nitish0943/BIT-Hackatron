@@ -1,226 +1,75 @@
 'use client';
 
-import { useState, useMemo } from 'react';
-import { useApp } from '@/lib/store';
-import { HelpRequest } from '@/lib/mockData';
-import { Filter, CheckCircle, XCircle, MapPin, Users, Clock, ChevronDown, ChevronUp } from 'lucide-react';
+import { useMemo } from 'react';
 import dynamic from 'next/dynamic';
+import { useApp } from '@/lib/store';
 
 const MapView = dynamic(() => import('@/components/MapView'), { ssr: false });
 
-const CAT_ICONS: Record<string, string> = {
-  medical: '🏥', rescue: '🚨', food: '🍱', water: '💧', shelter: '🏠',
-};
-
-const CAT_COLORS: Record<string, string> = {
-  medical: '#dc2626', rescue: '#d97706', food: '#2563eb', water: '#0891b2', shelter: '#7c3aed',
-};
-
 export default function VolunteerDashboardPage() {
-  const { state, updateStatus, assignVolunteer } = useApp();
-  const [filter, setFilter] = useState<'all' | 'medical' | 'rescue' | 'food' | 'water' | 'shelter'>('all');
-  const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [myTasks, setMyTasks] = useState<string[]>(['REQ-0001', 'REQ-0003', 'REQ-0007']);
+  const { state, assignRequest, completeRequestById } = useApp();
 
-  // Simulate logged-in volunteer: VOL-001
-  const ME = state.volunteers[0];
-
-  const pendingTasks = useMemo(() => {
-    return state.requests
-      .filter(r => r.status === 'pending' && (filter === 'all' || r.category === filter))
-      .sort((a, b) => b.priority - a.priority);
-  }, [state.requests, filter]);
-
-  const assignedToMe = useMemo(() =>
-    state.requests.filter(r => r.status === 'assigned' && (r.assignedVolunteerId === ME?.id || myTasks.includes(r.id))),
-    [state.requests, ME, myTasks]
+  const me = useMemo(
+    () => state.dashboard.volunteers.find((vol) => vol.phone === state.user.phone) ?? state.dashboard.volunteers[0],
+    [state.dashboard.volunteers, state.user.phone],
   );
 
-  const timeAgo = (iso: string) => {
-    const diff = Date.now() - new Date(iso).getTime();
-    const h = Math.floor(diff / 3_600_000);
-    if (h > 0) return `${h}h ago`;
-    return `${Math.floor((diff % 3_600_000) / 60_000)}m ago`;
-  };
+  const pending = useMemo(
+    () => state.dashboard.requests.filter((req) => req.status === 'pending').slice(0, 12),
+    [state.dashboard.requests],
+  );
 
-  const handleAccept = (req: HelpRequest) => {
-    assignVolunteer(req.id, ME?.id ?? 'VOL-001');
-    setMyTasks(prev => [...prev, req.id]);
-  };
+  const mine = useMemo(
+    () => state.dashboard.requests.filter((req) => req.assignedVolunteerId === me?.id && req.status !== 'completed'),
+    [state.dashboard.requests, me],
+  );
 
-  const handleComplete = (reqId: string) => {
-    updateStatus(reqId, 'completed');
-    setMyTasks(prev => prev.filter(id => id !== reqId));
-  };
+  if (!me) return <div className="max-w-6xl mx-auto px-4 py-10">Loading dashboard...</div>;
 
   return (
-    <div className="min-h-screen" style={{ background: '#f8fafc' }}>
-      {/* Header */}
-      <div style={{ background: 'linear-gradient(135deg,#0a1628,#1a3a6b)' }} className="px-4 py-6">
-        <div className="max-w-6xl mx-auto">
-          <div className="flex items-center justify-between">
-            <div>
-              <div className="text-blue-300 text-xs font-semibold uppercase tracking-widest">Volunteer Portal</div>
-              <h1 className="text-2xl font-black text-white mt-1">My Task Dashboard</h1>
-              {ME && <div className="text-blue-200 text-sm mt-1">👋 {ME.name} — Zone: {ME.zone}</div>}
-            </div>
-            <div className="text-right">
-              <div className="text-3xl font-black text-white">{ME?.tasksCompleted ?? 0}</div>
-              <div className="text-blue-300 text-xs">Tasks Completed</div>
-            </div>
-          </div>
+    <div className="max-w-7xl mx-auto px-4 py-8 space-y-5">
+      <section className="gov-card p-5">
+        <h1 className="gov-title text-2xl">Volunteer Operations Dashboard</h1>
+        <p className="text-sm text-slate-600 mt-1">Welcome, {me.name}. Manage nearby tasks from Jharkhand command network.</p>
+      </section>
 
-          {/* Stats */}
-          <div className="grid grid-cols-3 gap-3 mt-5">
-            {[
-              { label: 'Available Tasks', value: pendingTasks.length, color: '#d97706' },
-              { label: 'My Active Tasks', value: assignedToMe.length, color: '#2563eb' },
-              { label: 'Critical Priority', value: pendingTasks.filter(r => r.priority >= 60).length, color: '#dc2626' },
-            ].map(s => (
-              <div key={s.label} className="bg-white bg-opacity-10 rounded-xl p-3 text-center">
-                <div className="text-2xl font-black" style={{ color: s.color }}>{s.value}</div>
-                <div className="text-xs text-blue-200">{s.label}</div>
+      <section className="grid lg:grid-cols-3 gap-4">
+        <div className="gov-card p-4 lg:col-span-2">
+          <h2 className="gov-title text-lg mb-3">Nearby Requests</h2>
+          <div className="space-y-2 max-h-[420px] overflow-y-auto">
+            {pending.map((req) => (
+              <div key={req.id} className="border border-slate-200 rounded-md p-3 text-sm flex items-center justify-between">
+                <div>
+                  <p className="font-semibold text-slate-800">{req.id} - {req.category}</p>
+                  <p className="text-slate-500">{req.location} | Priority {req.priority}</p>
+                </div>
+                <button onClick={() => assignRequest(req.id, me.id)} className="px-3 py-1.5 rounded-md bg-[#0b3c5d] text-white">Accept</button>
               </div>
             ))}
           </div>
         </div>
-      </div>
 
-      <div className="max-w-6xl mx-auto px-4 py-6">
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Task list */}
-          <div className="lg:col-span-2">
-            {/* My assigned tasks */}
-            {assignedToMe.length > 0 && (
-              <div className="mb-6">
-                <h2 className="font-bold text-gray-800 mb-3 flex items-center gap-2">
-                  <span className="w-2 h-2 rounded-full bg-blue-500 inline-block animate-pulse"></span>
-                  My Active Tasks
-                </h2>
-                <div className="space-y-3">
-                  {assignedToMe.map(req => (
-                    <div key={req.id} className="bg-white rounded-xl border-2 border-blue-200 p-4 shadow-sm">
-                      <div className="flex justify-between items-start">
-                        <div className="flex items-center gap-3">
-                          <span className="text-2xl">{CAT_ICONS[req.category]}</span>
-                          <div>
-                            <div className="font-bold text-gray-800">{req.id}</div>
-                            <div className="text-sm text-gray-600">{req.name} — {req.familySize} members</div>
-                            <div className="text-xs text-gray-500 mt-1">{req.location.address}</div>
-                          </div>
-                        </div>
-                        <button
-                          onClick={() => handleComplete(req.id)}
-                          className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-white text-xs font-bold"
-                          style={{ background: '#16a34a' }}
-                        >
-                          <CheckCircle size={14} /> Mark Complete
-                        </button>
-                      </div>
-                      <div className="mt-3 h-1.5 bg-blue-100 rounded-full overflow-hidden">
-                        <div className="h-full w-3/5 rounded-full" style={{ background: '#2563eb' }} />
-                      </div>
-                      <div className="text-xs text-gray-500 mt-1">ETA: {req.eta}</div>
-                    </div>
-                  ))}
-                </div>
+        <div className="gov-card p-4">
+          <h2 className="gov-title text-lg mb-3">My Active Tasks</h2>
+          <div className="space-y-2 max-h-[420px] overflow-y-auto">
+            {mine.length === 0 && <p className="text-sm text-slate-500">No active tasks.</p>}
+            {mine.map((req) => (
+              <div key={req.id} className="border border-slate-200 rounded-md p-3 text-sm">
+                <p className="font-semibold text-slate-800">{req.id}</p>
+                <p className="text-slate-500">{req.location}</p>
+                <button onClick={() => completeRequestById(req.id)} className="mt-2 px-3 py-1.5 rounded-md border border-[#0b3c5d] text-[#0b3c5d]">Complete</button>
               </div>
-            )}
-
-            {/* Filter */}
-            <div className="flex items-center gap-2 mb-4 flex-wrap">
-              <Filter size={14} className="text-gray-500" />
-              {(['all', 'medical', 'rescue', 'food', 'water', 'shelter'] as const).map(f => (
-                <button key={f} onClick={() => setFilter(f)}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                    filter === f ? 'text-white' : 'bg-white border border-gray-200 text-gray-600'
-                  }`}
-                  style={{ background: filter === f ? (CAT_COLORS[f] ?? '#1a3a6b') : undefined }}
-                >
-                  {f === 'all' ? '🗂 All' : CAT_ICONS[f] + ' ' + f.charAt(0).toUpperCase() + f.slice(1)}
-                </button>
-              ))}
-            </div>
-
-            <h2 className="font-bold text-gray-800 mb-3">Available Tasks — Sorted by Priority</h2>
-            <div className="space-y-3">
-              {pendingTasks.slice(0, 15).map(req => {
-                const isExpanded = expandedId === req.id;
-                return (
-                  <div key={req.id} className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden"
-                    style={{ borderLeft: `4px solid ${CAT_COLORS[req.category]}` }}>
-                    <div className="p-4">
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="flex items-center gap-3 flex-1 min-w-0">
-                          <span className="text-2xl shrink-0">{CAT_ICONS[req.category]}</span>
-                          <div className="min-w-0">
-                            <div className="font-bold text-gray-800 text-sm">{req.id} – {req.name}</div>
-                            <div className="text-xs text-gray-500 truncate">{req.location.address}</div>
-                            <div className="flex items-center gap-3 mt-1 text-xs text-gray-500">
-                              <span className="flex items-center gap-1"><Users size={11} />{req.familySize}</span>
-                              <span className="flex items-center gap-1"><Clock size={11} />{timeAgo(req.createdAt)}</span>
-                              <span className="font-bold" style={{ color: req.priority >= 60 ? '#dc2626' : req.priority >= 44 ? '#d97706' : '#2563eb' }}>
-                                P:{req.priority}
-                              </span>
-                            </div>
-                          </div>
-                        </div>
-                        <div className="flex gap-2 shrink-0">
-                          <button onClick={() => handleAccept(req)}
-                            className="flex items-center gap-1 px-3 py-2 rounded-lg text-white text-xs font-bold"
-                            style={{ background: '#16a34a' }}>
-                            <CheckCircle size={12} /> Accept
-                          </button>
-                          <button onClick={() => setExpandedId(isExpanded ? null : req.id)}
-                            className="p-2 rounded-lg border border-gray-200 text-gray-500">
-                            {isExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                    {isExpanded && (
-                      <div className="border-t border-gray-100 p-4 bg-gray-50">
-                        <div className="text-sm text-gray-700 mb-2">{req.description}</div>
-                        <div className="text-xs text-gray-500">
-                          📍 Lat: {req.location.lat.toFixed(5)}, Lng: {req.location.lng.toFixed(5)}
-                        </div>
-                        {req.resourcesNeeded && (
-                          <div className="mt-2 flex flex-wrap gap-2">
-                            {Object.entries(req.resourcesNeeded).filter(([,v]) => v > 0).map(([k,v]) => (
-                              <span key={k} className="bg-blue-100 text-blue-700 text-xs px-2 py-0.5 rounded-full">
-                                {v} {k.replace(/_/g,' ')}
-                              </span>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Map sidebar */}
-          <div>
-            <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden sticky top-20">
-              <div className="px-4 py-3 border-b border-gray-100 flex items-center gap-2">
-                <MapPin size={15} className="text-blue-600" />
-                <span className="font-bold text-sm text-gray-800">Nearby Requests</span>
-              </div>
-              <MapView
-                requests={pendingTasks.slice(0, 20)}
-                volunteers={ME ? [ME] : []}
-                height="320px"
-                showHeatmap
-              />
-              <div className="p-3 text-xs text-gray-500 border-t border-gray-100">
-                🟡 Your position (green) | Requests shown by category color
-              </div>
-            </div>
+            ))}
           </div>
         </div>
-      </div>
+      </section>
+
+      <section className="gov-card overflow-hidden">
+        <div className="p-4 border-b border-slate-200">
+          <h2 className="gov-title text-lg">Jharkhand Task Map</h2>
+        </div>
+        <MapView requests={pending} volunteers={[me]} height="420px" showHeatmap showClusters />
+      </section>
     </div>
   );
 }

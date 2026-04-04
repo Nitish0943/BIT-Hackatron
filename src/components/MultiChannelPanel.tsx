@@ -4,7 +4,6 @@ import { useState } from 'react';
 import { useApp } from '@/lib/store';
 import { Phone, MessageSquare, Zap, Cpu, CheckCircle } from 'lucide-react';
 import { ivrCodeToCategory, parseWhatsAppMessage } from '@/lib/aiLogic';
-import { HelpRequest } from '@/lib/mockData';
 
 const TABS = [
   { id: 'ivr', label: 'IVR System', icon: Phone },
@@ -21,10 +20,8 @@ const MOCK_DRONE_DETECTIONS = [
   { id: 'D005', lat: 13.065, lng: 80.290, persons: 8, flag: 'red', area: 'Zone E - Central' },
 ];
 
-let missedCallCounter = 900;
-
 export default function MultiChannelPanel() {
-  const { state, createRequest } = useApp();
+  const { createRequest } = useApp();
   const [activeTab, setActiveTab] = useState('ivr');
   const [ivrPhone, setIvrPhone] = useState('');
   const [ivrLog, setIvrLog] = useState<string[]>([]);
@@ -35,73 +32,62 @@ export default function MultiChannelPanel() {
   const [missedLog, setMissedLog] = useState<string[]>([]);
 
   // IVR: Simulate digit press
-  const handleIVR = (digit: string) => {
+  const handleIVR = async (digit: string) => {
     if (!ivrPhone) { setIvrLog(l => [`⚠️ Enter a phone number first`, ...l]); return; }
     const category = ivrCodeToCategory(digit);
-    const id = createRequest({
+    const req = await createRequest({
       name: 'IVR Caller',
       phone: ivrPhone,
       category,
-      status: 'pending',
-      location: { lat: 13.08 + Math.random() * 0.1, lng: 80.27 + Math.random() * 0.1, address: 'Via IVR, Chennai' },
-      familySize: 1,
-      source: 'ivr',
-      zone: 'Zone A – North',
+      people: 1,
+      location: 'Ranchi - IVR Input',
+      zone: 'Ranchi',
     });
-    setIvrLog(l => [`✅ ${id} | Category: ${category} | Ph: ${ivrPhone}`, ...l.slice(0, 9)]);
+    setIvrLog(l => [`✅ ${req?.id ?? 'QUEUED'} | Category: ${category} | Ph: ${ivrPhone}`, ...l.slice(0, 9)]);
   };
 
   // Missed Call simulation
-  const handleMissedCall = () => {
+  const handleMissedCall = async () => {
     const phone = `98${Math.floor(10000000 + Math.random() * 90000000)}`;
-    const id = createRequest({
+    const req = await createRequest({
       name: 'Unknown Caller',
       phone,
       category: 'rescue',
-      status: 'pending',
-      location: { lat: 13.08 + Math.random() * 0.1, lng: 80.27 + Math.random() * 0.1, address: 'Missed Call Signal, Chennai' },
-      familySize: 1,
-      source: 'missed_call',
-      description: 'Missed Call Signal – Emergency rescue assumed',
-      zone: 'Zone B – East',
+      people: 1,
+      location: 'Dhanbad - Missed Call Signal',
+      zone: 'Dhanbad',
     });
-    setMissedLog(l => [`📲 ${id} | Missed Call from ${phone} – Auto-tagged Rescue`, ...l.slice(0, 9)]);
+    setMissedLog(l => [`📲 ${req?.id ?? 'QUEUED'} | Missed Call from ${phone} – Auto-tagged Rescue`, ...l.slice(0, 9)]);
   };
 
   // WhatsApp parse + create
-  const handleWA = () => {
+  const handleWA = async () => {
     if (!waMessage || !waPhone) return;
     const category = parseWhatsAppMessage(waMessage) ?? 'food';
     const numMatch = waMessage.match(/\d+/);
     const familySize = numMatch ? Math.min(parseInt(numMatch[0]), 20) : 1;
-    const id = createRequest({
+    const req = await createRequest({
       name: 'WhatsApp User',
       phone: waPhone,
       category,
-      status: 'pending',
-      location: { lat: 13.08 + Math.random() * 0.1, lng: 80.27 + Math.random() * 0.1, address: 'Via WhatsApp, Chennai' },
-      familySize,
-      source: 'whatsapp',
-      description: waMessage,
-      zone: 'Zone C – South',
+      people: familySize,
+      location: 'Jamshedpur - WhatsApp Input',
+      zone: 'Jamshedpur',
     });
-    setWaLog(l => [`✅ ${id} | "${waMessage}" → ${category} for ${familySize}`, ...l.slice(0, 9)]);
+    setWaLog(l => [`✅ ${req?.id ?? 'QUEUED'} | "${waMessage}" → ${category} for ${familySize}`, ...l.slice(0, 9)]);
     setWaMessage('');
   };
 
   // Drone: convert detection to request
   const convertDroneDetection = (d: typeof MOCK_DRONE_DETECTIONS[0]) => {
     if (droneConverted.includes(d.id)) return;
-    const id = createRequest({
+    void createRequest({
       name: `Drone Target ${d.id}`,
       phone: '0000000000',
       category: d.flag === 'red' ? 'rescue' : 'food',
-      status: 'pending',
-      location: { lat: d.lat, lng: d.lng, address: d.area },
-      familySize: d.persons,
-      source: 'drone',
-      description: `Drone detected ${d.persons} persons. Flag: ${d.flag.toUpperCase()}`,
-      zone: d.area,
+      people: d.persons,
+      location: d.area,
+      zone: d.area.includes('North') ? 'Ranchi' : d.area.includes('East') ? 'Dhanbad' : 'Jamshedpur',
     });
     setDroneConverted(prev => [...prev, d.id]);
   };

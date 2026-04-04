@@ -1,121 +1,106 @@
-// AI Logic Engine – SahayakNet
-// Priority scoring, duplicate detection, resource calculation, demand prediction
+import { HelpRequest, RequestCategory, Resource, Volunteer } from './mockData';
 
-import { HelpRequest, Volunteer, Resource, RequestCategory } from './mockData';
-
-// ─── Priority Scoring ─────────────────────────────────────────────────────────
-const SEVERITY_MAP: Record<RequestCategory, number> = {
-  medical: 50,
-  rescue: 40,
-  food: 30,
-  water: 20,
-  shelter: 10,
-};
-
-export function computePriority(
-  category: RequestCategory,
-  familySize: number,
-  createdAt: string,
-): number {
-  const waitingHours = (Date.now() - new Date(createdAt).getTime()) / 3_600_000;
-  const severity = SEVERITY_MAP[category];
-  const familyBonus = familySize * 2;
-  const waitBonus = Math.min(Math.floor(waitingHours / 4) * 3, 30); // cap at 30
-  return severity + familyBonus + waitBonus;
-}
-
-// ─── Duplicate Detection ──────────────────────────────────────────────────────
-export function findDuplicate(
-  newReq: Pick<HelpRequest, 'location' | 'category' | 'phone'>,
-  existing: HelpRequest[],
-): HelpRequest | null {
-  const DISTANCE_THRESHOLD = 0.005; // ~500m in lat/lng degrees
-
-  for (const req of existing) {
-    // Same phone → definitely same person
-    if (req.phone === newReq.phone && req.category === newReq.category) return req;
-
-    // Same category + location within threshold
-    const latDiff = Math.abs(req.location.lat - newReq.location.lat);
-    const lngDiff = Math.abs(req.location.lng - newReq.location.lng);
-    if (latDiff < DISTANCE_THRESHOLD && lngDiff < DISTANCE_THRESHOLD && req.category === newReq.category) {
-      return req;
-    }
-  }
-  return null;
-}
-
-// ─── Resource Calculation ─────────────────────────────────────────────────────
-export function calculateResources(
-  category: RequestCategory,
-  familySize: number,
-): Record<string, number> {
-  return {
-    food_packets: familySize * 3,
-    water_liters: familySize * 5,
-    medicine_kits: category === 'medical' ? Math.ceil(familySize / 2) : 0,
-    shelter_units: category === 'shelter' ? Math.ceil(familySize / 4) : 0,
-    rescue_boats: category === 'rescue' ? 1 : 0,
-  };
-}
-
-// ─── Demand Prediction ────────────────────────────────────────────────────────
 export interface DepletionForecast {
   resourceName: string;
   available: number;
-  unit: string;
-  daysUntilDepletion: number | null; // null = unlimited
+  total: number;
+  percent: number;
   isUrgent: boolean;
 }
 
-export function predictDepletion(resources: Resource[]): DepletionForecast[] {
-  return resources.map((r) => {
-    if (r.dailyConsumption === 0) {
-      return { resourceName: r.name, available: r.available, unit: r.unit, daysUntilDepletion: null, isUrgent: false };
+const SEVERITY_MAP: Record<RequestCategory, number> = {
+  medical: 50,
+  rescue: 45,
+  food: 30,
+  shelter: 20,
+};
+
+export function computePriority(category: RequestCategory, people: number, createdAt: string): number {
+  const severity = SEVERITY_MAP[category];
+  const peopleScore = Math.max(1, people) * 2;
+  const waitingHours = Math.max(0, Math.floor((Date.now() - new Date(createdAt).getTime()) / 3_600_000));
+  const waitingScore = Math.min(waitingHours * 2, 30);
+  return severity + peopleScore + waitingScore;
+}
+
+export function priorityLevel(priority: number): 'high' | 'medium' | 'low' {
+  if (priority >= 60) return 'high';
+  if (priority >= 40) return 'medium';
+  return 'low';
+}
+
+export interface RequestCluster {
+  id: string;
+  lat: number;
+  lng: number;
+  count: number;
+  high: number;
+  medium: number;
+  low: number;
+}
+
+export function clusterNearbyRequests(requests: HelpRequest[]): RequestCluster[] {
+  const clusters: RequestCluster[] = [];
+  const threshold = 0.08;
+  requests.forEach((req) => {
+    const existing = clusters.find(
+      (cluster) =>
+        Math.abs(cluster.lat - req.lat) < threshold &&
+        Math.abs(cluster.lng - req.lng) < threshold,
+    );
+    const level = priorityLevel(req.priority);
+    if (existing) {
+      existing.count += 1;
+      existing[level] += 1;
+    } else {
+      clusters.push({
+        id: `cluster-${clusters.length + 1}`,
+        lat: req.lat,
+        lng: req.lng,
+        count: 1,
+        high: level === 'high' ? 1 : 0,
+        medium: level === 'medium' ? 1 : 0,
+        low: level === 'low' ? 1 : 0,
+      });
     }
-    const days = parseFloat((r.available / r.dailyConsumption).toFixed(1));
+  });
+  return clusters;
+}
+
+export function suggestNearestVolunteer(request: HelpRequest, volunteers: Volunteer[]): Volunteer | null {
+  const available = volunteers.filter((vol) => vol.availability === 'available');
+  if (!available.length) return null;
+  let best: Volunteer | null = null;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  available.forEach((vol) => {
+    const distance = Math.sqrt((vol.lat - request.lat) ** 2 + (vol.lng - request.lng) ** 2);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      best = vol;
+    }
+  });
+  return best;
+}
+
+export function predictDepletion(resources: Resource[]): DepletionForecast[] {
+  return resources.map((resource) => {
+    const pct = Math.round((resource.available / Math.max(resource.total, 1)) * 100);
     return {
-      resourceName: r.name,
-      available: r.available,
-      unit: r.unit,
-      daysUntilDepletion: days,
-      isUrgent: days <= 3,
+      resourceName: resource.name,
+      available: resource.available,
+      total: resource.total,
+      percent: pct,
+      isUrgent: pct < 30,
     };
   });
 }
 
-// ─── Nearest Volunteer ────────────────────────────────────────────────────────
-export function findNearestVolunteer(
-  request: HelpRequest,
-  volunteers: Volunteer[],
-): Volunteer | null {
-  const available = volunteers.filter((v) => v.status === 'available');
-  if (!available.length) return null;
-
-  let nearest: Volunteer | null = null;
-  let minDist = Infinity;
-
-  for (const v of available) {
-    const dist =
-      Math.pow(v.location.lat - request.location.lat, 2) +
-      Math.pow(v.location.lng - request.location.lng, 2);
-    if (dist < minDist) {
-      minDist = dist;
-      nearest = v;
-    }
-  }
-  return nearest;
-}
-
-// ─── IVR / Multi-channel request parser ───────────────────────────────────────
-export function parseWhatsAppMessage(text: string): RequestCategory | null {
+export function parseWhatsAppMessage(text: string): RequestCategory {
   const lower = text.toLowerCase();
-  if (lower.includes('medical') || lower.includes('medicine') || lower.includes('doctor') || lower.includes('hospital')) return 'medical';
-  if (lower.includes('rescue') || lower.includes('trapped') || lower.includes('stuck') || lower.includes('drown')) return 'rescue';
-  if (lower.includes('food') || lower.includes('hungry') || lower.includes('eat')) return 'food';
-  if (lower.includes('water') || lower.includes('drink')) return 'water';
-  if (lower.includes('shelter') || lower.includes('house') || lower.includes('roof') || lower.includes('stay')) return 'shelter';
-  return 'food'; // default
+  if (lower.includes('medical') || lower.includes('doctor') || lower.includes('medicine')) return 'medical';
+  if (lower.includes('rescue') || lower.includes('trapped') || lower.includes('stuck')) return 'rescue';
+  if (lower.includes('shelter') || lower.includes('house') || lower.includes('camp')) return 'shelter';
+  return 'food';
 }
 
 export function ivrCodeToCategory(code: string): RequestCategory {
@@ -123,8 +108,7 @@ export function ivrCodeToCategory(code: string): RequestCategory {
     '1': 'food',
     '2': 'medical',
     '3': 'rescue',
-    '4': 'water',
-    '5': 'shelter',
+    '4': 'shelter',
   };
   return map[code] ?? 'food';
 }
