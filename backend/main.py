@@ -1,17 +1,16 @@
 from __future__ import annotations
 
 import asyncio
-import json
+import random
 from datetime import datetime, timezone
 from math import ceil
-from pathlib import Path
 from urllib.parse import parse_qs
 from typing import Any, Literal, Optional
+from xml.sax.saxutils import escape as xml_escape
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 
@@ -139,41 +138,10 @@ dashboard_cache_compact: dict[str, Any] = {}
 dashboard_cache_updated_at = ""
 duplicate_request_index: dict[str, str] = {}
 cache_refresh_task: asyncio.Task[None] | None = None
-WHATSAPP_DATA_FILE = Path(__file__).with_name("whatsapp_requests.json")
-FRONTEND_HTML_FILE = Path(__file__).with_name("frontend.html")
 
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-
-def load_whatsapp_data() -> list[dict[str, Any]]:
-    if not WHATSAPP_DATA_FILE.exists():
-        WHATSAPP_DATA_FILE.write_text("[]", encoding="utf-8")
-
-    try:
-        content = WHATSAPP_DATA_FILE.read_text(encoding="utf-8").strip()
-        data = json.loads(content) if content else []
-        return data if isinstance(data, list) else []
-    except (OSError, json.JSONDecodeError):
-        return []
-
-
-def save_whatsapp_data(records: list[dict[str, Any]]) -> None:
-    WHATSAPP_DATA_FILE.write_text(json.dumps(records, indent=2), encoding="utf-8")
-
-
-def append_whatsapp_request(phone: str, request_type: str) -> dict[str, str]:
-    record = {"phone": phone, "type": request_type, "time": now_iso()}
-    records = load_whatsapp_data()
-    records.insert(0, record)
-    save_whatsapp_data(records)
-    return record
-
-
-def twilio_response(message: str) -> str:
-    escaped = message.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-    return f'<?xml version="1.0" encoding="UTF-8"?><Response><Message>{escaped}</Message></Response>'
 
 
 def normalize_location(value: str) -> str:
@@ -227,6 +195,10 @@ def priority_reason(category: RequestCategory, family_size: int) -> str:
     }
     base = reason_map[category]
     return f"High priority due to {base} + {family_size} member{'s' if family_size > 1 else ''}."
+
+
+def source_label(source: str) -> str:
+    return source.replace("_", " ").upper()
 
 
 def resource_summary(category: RequestCategory, family_size: int) -> str:
@@ -322,7 +294,7 @@ def build_request(
         "createdAt": created_at,
         "status": "pending",
         "source": source,
-        "sourceLabel": source.replace("_", " ").title(),
+        "sourceLabel": source_label(source),
         "resourcesNeeded": calculate_resources(category, family_size),
         "resourceSummary": resource_summary(category, family_size),
         "priorityReason": priority_reason(category, family_size),
@@ -602,7 +574,7 @@ def seed_data() -> None:
             "status": status,
             "executionStatus": "completed" if status == "completed" else ("assigned" if status == "assigned" else "pending"),
             "source": source,
-            "sourceLabel": source.replace("_", " ").title(),
+            "sourceLabel": source_label(source),
             "resourcesNeeded": calculate_resources(category, family_size),
             "resourceSummary": resource_summary(category, family_size),
             "priorityReason": priority_reason(category, family_size),
@@ -673,13 +645,8 @@ async def shutdown_event() -> None:
 
 
 @app.get("/")
-async def root() -> FileResponse:
-    return FileResponse(FRONTEND_HTML_FILE)
-
-
-@app.get("/data")
-async def get_data() -> list[dict[str, Any]]:
-    return load_whatsapp_data()
+async def root() -> dict[str, Any]:
+    return {"service": "SahayakNet API", "status": "ok"}
 
 
 @app.post("/request")
@@ -896,40 +863,59 @@ async def ivr_create(payload: IVRIn, background_tasks: BackgroundTasks):
 
 
 @app.post("/whatsapp")
-async def whatsapp_create(request: Request):
+async def whatsapp_create(request: Request, background_tasks: BackgroundTasks):
     content_type = request.headers.get("content-type", "")
-    phone = ""
-    body = ""
+    reply_text = ""
+    request_result: dict[str, Any] | None = None
 
     if "application/json" in content_type:
         payload = await request.json()
-        phone = str(payload.get("From", "")).strip()
-        body = str(payload.get("Body", "")).strip()
+        phone = str(payload.get("phone") or payload.get("From") or "").strip()
+        message = str(payload.get("message") or payload.get("Body") or "").strip()
+        location = str(payload.get("location") or "").strip() or None
+        zone = str(payload.get("zone") or "").strip() or None
+        payload_kind = "json"
     else:
-        raw = (await request.body()).decode("utf-8", errors="ignore")
-        form = parse_qs(raw)
-        phone = form.get("From", [""])[0].strip()
-        body = form.get("Body", [""])[0].strip()
+        raw_body = (await request.body()).decode("utf-8", errors="ignore")
+        form = parse_qs(raw_body)
+        phone = str((form.get("From") or form.get("phone") or [""])[0]).strip()
+        message = str((form.get("Body") or form.get("message") or [""])[0]).strip()
+        location = str((form.get("location") or [""])[0]).strip() or None
+        zone = str((form.get("zone") or [""])[0]).strip() or None
+        payload_kind = "form"
 
-    choice_map = {
-        "1": "Medical",
-        "2": "Food",
-        "3": "Rescue",
-        "4": "Water & Shelter",
+    selection_map: dict[str, tuple[RequestCategory, str]] = {
+        "1": ("medical", "Medical"),
+        "2": ("food", "Food"),
+        "3": ("rescue", "Rescue"),
+        "4": ("water", "Water & Shelter"),
     }
 
-    selected_type = choice_map.get(body)
-    if selected_type and phone:
-        append_whatsapp_request(phone, selected_type)
-        reply_text = f"Your request for {selected_type} has been received. Our team will contact you soon."
+    selected = selection_map.get(message.strip())
+    if selected and phone:
+        category, label = selected
+        zone_value = zone or "Dhanbad"
+        location_value = location or "Auto-detected area"
+        request_result = build_request(
+            name="WhatsApp User",
+            phone=phone,
+            category=category,
+            family_size=random.randint(2, 6),
+            location=location_value,
+            zone=zone_value,
+            source="whatsapp",
+        )
+        background_tasks.add_task(apply_request_post_processing, request_result["id"])
+        schedule_cache_refresh(background_tasks)
+        reply_text = f"{label} request received. Request ID: {request_result['id']}"
     else:
         reply_text = (
-            "Namaste / Hello\n"
+            "Namaste / Hello\n\n"
             "Please choose a service:\n"
-            "1 Medical Help\n"
-            "2 Food Support\n"
+            "1 Medical\n"
+            "2 Food\n"
             "3 Rescue\n"
-            "4 Water & Shelter\n\n"
+            "4 Water\n\n"
             "कृपया सेवा चुनें:\n"
             "1 चिकित्सा\n"
             "2 भोजन\n"
@@ -937,7 +923,13 @@ async def whatsapp_create(request: Request):
             "4 पानी"
         )
 
-    return Response(content=twilio_response(reply_text), media_type="application/xml")
+    if payload_kind == "json" and request_result is not None:
+        return request_result
+
+    return Response(
+        content=f"<Response><Message>{xml_escape(reply_text)}</Message></Response>",
+        media_type="application/xml",
+    )
 
 
 @app.post("/missed-call")
@@ -993,6 +985,11 @@ async def update_priority(payload: PriorityIn, background_tasks: BackgroundTasks
     request["priority"] = payload.priority
     schedule_cache_refresh(background_tasks)
     return {"success": True, "request": request}
+
+# NGO DASHBOARD API
+@app.get("/data")
+def get_data():
+    return requests
 
 
 @app.get("/dashboard")
