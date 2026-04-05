@@ -8,16 +8,20 @@ from pathlib import Path
 from urllib.parse import parse_qs
 from typing import Any, Literal, Optional
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, Response
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
+try:
+    from providers.msg91 import send_emergency_sms
+except ImportError:
+    send_emergency_sms = None
 
 RequestCategory = Literal["food", "medical", "rescue", "shelter", "baby_care", "women_care", "water", "emergency_help"]
 RequestStatus = Literal["pending", "assigned", "completed"]
-RequestSource = Literal["web", "ivr", "whatsapp", "missed_call", "drone"]
+RequestSource = Literal["web", "ivr", "whatsapp", "missed_call", "drone", "mobile", "sms_fallback"]
 VolunteerAvailability = Literal["available", "busy", "inactive"]
 
 
@@ -110,7 +114,7 @@ app.add_middleware(GZipMiddleware, minimum_size=500)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -330,9 +334,12 @@ def build_request(
         "assignedVolunteerId": None,
         "assignedVolunteerName": None,
         "eta": None,
+        "sms_status": "not_required",
+        "provider_message_id": None,
     }
     requests.insert(0, request)
     duplicate_request_index[duplicate_key(category, location)] = request_id
+
     return request
 
 
@@ -369,7 +376,9 @@ def compact_request(item: dict[str, Any]) -> dict[str, Any]:
         "assignedVolunteerId": item.get("assignedVolunteerId"),
         "assignedVolunteerName": item.get("assignedVolunteerName"),
         "eta": item.get("eta"),
+        "sms_status": item.get("sms_status"),
     }
+
 
 
 def compact_volunteer(item: dict[str, Any]) -> dict[str, Any]:
@@ -446,6 +455,15 @@ def apply_request_post_processing(request_id: str) -> None:
     request["resourcesNeeded"] = calculate_resources(category, family_size)
     request["priorityReason"] = priority_reason(category, family_size)
 
+    # --- DEMO SYNC: Auto-assign mobile requests to Volunteer 1 for instant calling demo ---
+    if request.get("source") == "mobile" and request.get("status") == "pending":
+        request["status"] = "assigned"
+        request["executionStatus"] = "assigned"
+        request["assignedVolunteerId"] = "VOL-001"
+        request["assignedVolunteerName"] = "Field Responder (Demo)"
+        request["eta"] = "2 mins"
+        print(f"[DEMO] Auto-assigned mobile request {request_id} to VOL-001")
+
     if category == "food":
         request["resourceSummary"] = resource_summary(category, family_size)
     elif category == "medical":
@@ -462,6 +480,25 @@ def apply_request_post_processing(request_id: str) -> None:
     elif request.get("status") == "pending":
         request["executionStatus"] = "pending"
 
+    refresh_dashboard_cache()
+
+def async_sms_worker(request_id: str):
+    request = find_request(request_id)
+    if not request or not send_emergency_sms:
+        return
+    
+    phone = request.get("phone")
+    if not phone:
+        return
+        
+    request["sms_status"] = "pending"
+    refresh_dashboard_cache()
+    
+    msg = f"SahayakNet Alert: Emergency request received. ID: {request['id']}. Relief teams have been notified."
+    res = send_emergency_sms(phone, msg, request.get("name", "Citizen"))
+    
+    request["sms_status"] = res.get("status", "failed")
+    request["provider_message_id"] = res.get("message_id")
     refresh_dashboard_cache()
 
 
@@ -696,6 +733,10 @@ async def create_request(payload: RequestIn, background_tasks: BackgroundTasks):
         lng=payload.lng,
     )
     background_tasks.add_task(apply_request_post_processing, request["id"])
+    
+    if request["source"] in ["sms_fallback", "ivr", "missed_call"]:
+        background_tasks.add_task(async_sms_worker, request["id"])
+        
     schedule_cache_refresh(background_tasks)
     return request
 
@@ -994,6 +1035,46 @@ async def update_priority(payload: PriorityIn, background_tasks: BackgroundTasks
     schedule_cache_refresh(background_tasks)
     return {"success": True, "request": request}
 
+
+# --- WEBRTC SIGNALING MANAGER ---
+
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: dict[str, WebSocket] = {}
+
+    async def connect(self, user_id: str, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections[user_id] = websocket
+        # Notify others if needed (optional)
+
+    def disconnect(self, user_id: str):
+        if user_id in self.active_connections:
+            del self.active_connections[user_id]
+
+    async def send_personal_message(self, message: dict, user_id: str):
+        if user_id in self.active_connections:
+            await self.active_connections[user_id].send_json(message)
+
+manager = ConnectionManager()
+
+@app.websocket("/ws/calling/{user_id}")
+async def websocket_endpoint(websocket: WebSocket, user_id: str):
+    await manager.connect(user_id, websocket)
+    print(f"[WS] Connected: {user_id}")
+    try:
+        while True:
+            data = await websocket.receive_json()
+            target_id = data.get("targetId")
+            msg_type = data.get("type")
+            if target_id:
+                # Forward signaling (offer, answer, candidate, hangup)
+                print(f"[WS] Forwarding {msg_type} from {user_id} to {target_id}")
+                await manager.send_personal_message(data, target_id)
+            else:
+                print(f"[WS] No target for {msg_type} from {user_id}")
+    except WebSocketDisconnect:
+        print(f"[WS] Disconnected: {user_id}")
+        manager.disconnect(user_id)
 
 @app.get("/dashboard")
 async def get_dashboard(
