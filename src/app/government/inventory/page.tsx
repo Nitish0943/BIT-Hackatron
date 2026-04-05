@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState, type ComponentType } from 'react';
+import { useEffect, useMemo, useState, type ComponentType, type CSSProperties } from 'react';
 import Image from 'next/image';
 import {
   AlertTriangle,
@@ -41,7 +41,7 @@ type BreakdownItem = {
 type ResourceBlueprint = {
   kind: ResourceKind;
   category: keyof ResourceNeed;
-  icon: ComponentType<{ className?: string }>;
+  icon: ComponentType<{ className?: string; style?: CSSProperties }>;
   color: string;
   accent: string;
   image: string;
@@ -474,7 +474,7 @@ export default function GovernmentInventoryPage() {
   const insights = useMemo(() => {
     const demandZone = topZone?.zone ?? 'Dhanbad';
     const medicalTrend = medicalRow?.changePercent ?? 0;
-    const foodRisk = foodRow?.shortage > 0 || (foodRow?.daysRemaining ?? Number.POSITIVE_INFINITY) < 0.5;
+    const foodRisk = (foodRow?.shortage ?? 0) > 0 || (foodRow?.daysRemaining ?? Number.POSITIVE_INFINITY) < 0.5;
     const babyRow = resourceRows.find((row) => row.blueprint.category === 'babyCare');
     const womenRow = resourceRows.find((row) => row.blueprint.category === 'womenCare');
     const waterRow = resourceRows.find((row) => row.blueprint.category === 'water');
