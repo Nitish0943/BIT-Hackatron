@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Live Disaster Requests</title>
+  <style>
+    :root {
+      --bg: #f5f7fb;
+      --panel: #ffffff;
+      --text: #0f172a;
+      --muted: #64748b;
+      --border: #dbe3ee;
+      --red: #dc2626;
+      --yellow: #ca8a04;
+      --blue: #2563eb;
+      --green: #16a34a;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Arial, Helvetica, sans-serif;
+      background: linear-gradient(180deg, #eef4fb 0%, var(--bg) 100%);
+      color: var(--text);
+    }
+
+    .wrap {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 24px;
+    }
+
+    .header {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      padding: 20px;
+      box-shadow: 0 10px 30px rgba(15, 23, 42, 0.05);
+      margin-bottom: 18px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 30px;
+      color: #0b3c5d;
+    }
+
+    .sub {
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .status {
+      margin-top: 12px;
+      display: inline-flex;
+      gap: 8px;
+      align-items: center;
+      border: 1px solid var(--border);
+      background: #f8fafc;
+      padding: 8px 12px;
+      border-radius: 999px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .grid {
+      display: grid;
+      gap: 14px;
+    }
+
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 16px;
+      box-shadow: 0 8px 24px rgba(15, 23, 42, 0.04);
+    }
+
+    .row {
+      display: grid;
+      grid-template-columns: 1.2fr 1fr 1fr;
+      gap: 12px;
+      align-items: center;
+      padding: 12px 0;
+      border-top: 1px solid #eef2f7;
+    }
+
+    .row:first-child { border-top: 0; padding-top: 0; }
+
+    .phone {
+      font-weight: 700;
+      color: #0b3c5d;
+      word-break: break-word;
+    }
+
+    .type {
+      display: inline-flex;
+      width: fit-content;
+      padding: 6px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+      color: white;
+    }
+
+    .type.medical { background: var(--red); }
+    .type.food { background: var(--yellow); color: #1f2937; }
+    .type.rescue { background: var(--blue); }
+    .type.water { background: var(--green); }
+
+    .time {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .empty {
+      color: var(--muted);
+      font-size: 14px;
+      padding: 8px 0;
+    }
+
+    .error {
+      color: #b91c1c;
+      font-size: 14px;
+      margin-top: 10px;
+    }
+
+    @media (max-width: 700px) {
+      .row { grid-template-columns: 1fr; gap: 8px; }
+      h1 { font-size: 24px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="header">
+      <h1>Live Disaster Requests</h1>
+      <div class="sub">Realtime WhatsApp intake dashboard for medical, food, rescue, and water & shelter requests.</div>
+      <div class="status">Auto-refresh every 3 seconds</div>
+    </div>
+
+    <div class="card">
+      <div id="list" class="grid"></div>
+      <div id="error" class="error"></div>
+    </div>
+  </div>
+
+  <script>
+    const list = document.getElementById('list');
+    const error = document.getElementById('error');
+
+    function formatTime(value) {
+      const date = new Date(value);
+      return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+    }
+
+    function render(rows) {
+      if (!rows.length) {
+        list.innerHTML = '<div class="empty">No requests received yet.</div>';
+        return;
+      }
+
+      list.innerHTML = rows.map((row) => {
+        const typeClass = String(row.type || '').toLowerCase().replace(/\s+/g, '');
+        return `
+          <div class="row">
+            <div class="phone">${row.phone || '-'}</div>
+            <div><span class="type ${typeClass}">${row.type || '-'}</span></div>
+            <div class="time">${formatTime(row.time)}</div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    async function loadData() {
+      try {
+        error.textContent = '';
+        const response = await fetch('/data', { cache: 'no-store' });
+        if (!response.ok) throw new Error('Failed to load requests');
+        const data = await response.json();
+        render(Array.isArray(data) ? data : []);
+      } catch (err) {
+        error.textContent = 'Unable to load live requests right now.';
+      }
+    }
+
+    loadData();
+    setInterval(loadData, 3000);
+  </script>
+</body>
+</html>
