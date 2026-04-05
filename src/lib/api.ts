@@ -1,6 +1,6 @@
-import { DashboardData, HelpRequest } from './mockData';
+import { BroadcastHistoryItem, BroadcastMessageType, DashboardData, DroneDetectionResult, HelpRequest, RiskAnalysis, Volunteer, WeatherData } from './mockData';
 
-const API_BASE = 'http://localhost:8000';
+const API_BASE = (process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:8000').replace(/\/$/, '');
 
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
 	const res = await fetch(`${API_BASE}${path}`, {
@@ -26,8 +26,8 @@ export function getRequestById(requestId: string): Promise<HelpRequest> {
 	return call<HelpRequest>(`/request/${requestId}`);
 }
 
-export function getVolunteers(): Promise<any[]> {
-	return call<any[]>('/volunteers');
+export function getVolunteers(): Promise<Volunteer[]> {
+	return call<Volunteer[]>('/volunteers');
 }
 
 export function getDashboard(): Promise<DashboardData> {
@@ -41,7 +41,7 @@ export function createRequest(payload: {
 	people: number;
 	location: string;
 	zone: string;
-	source?: 'web' | 'ivr' | 'whatsapp' | 'missed_call' | 'drone';
+	source?: 'web' | 'ivr' | 'whatsapp' | 'sms' | 'missed_call' | 'drone';
 }) {
 	return call<HelpRequest>('/request', {
 		method: 'POST',
@@ -131,13 +131,74 @@ export function createDroneRequest(payload: {
 	lat?: number;
 	lng?: number;
 	persons?: number;
+	people_count?: number;
 	flag?: 'red' | 'yellow' | 'green';
 	area?: string;
 	zone?: string;
+	image?: string;
+	image_path?: string;
+	detected_at?: string;
+	status_text?: string;
+	priority?: 'LOW' | 'MEDIUM' | 'HIGH';
 }) {
 	return call<HelpRequest>('/drone', {
 		method: 'POST',
 		body: JSON.stringify(payload),
+	});
+}
+
+export function detectDroneFrame(payload: { image: string; confidence?: number }) {
+	return call<DroneDetectionResult>('/drone/detect', {
+		method: 'POST',
+		body: JSON.stringify(payload),
+	});
+}
+
+export async function predictDroneFrame(payload: { frame: Blob; confidence?: number }) {
+	const formData = new FormData();
+	formData.append('frame', payload.frame, 'frame.jpg');
+	if (typeof payload.confidence === 'number') {
+		formData.append('confidence', String(payload.confidence));
+	}
+
+	const res = await fetch(`${API_BASE}/predict`, {
+		method: 'POST',
+		body: formData,
+		cache: 'no-store',
+	});
+
+	if (!res.ok) {
+		const text = await res.text();
+		throw new Error(text || `API error ${res.status}`);
+	}
+
+	return res.json() as Promise<DroneDetectionResult & { risk_score: number; priority: 'LOW' | 'MEDIUM' | 'HIGH' }>;
+}
+
+export function sendDroneRequest(payload: {
+	zone: string;
+	lat: number;
+	lng: number;
+	people_count: number;
+	priority: 'LOW' | 'MEDIUM' | 'HIGH';
+	location?: string;
+}) {
+	const area = payload.location || `Drone Survey Feed - ${payload.zone}`;
+	return call<HelpRequest>('/request', {
+		method: 'POST',
+		body: JSON.stringify({
+			name: 'Drone Survey Auto',
+			phone: '0000000000',
+			category: payload.priority === 'HIGH' ? 'rescue' : 'medical',
+			people: Math.max(1, payload.people_count),
+			location: area,
+			zone: payload.zone,
+			lat: payload.lat,
+			lng: payload.lng,
+			source: 'drone',
+			people_count: payload.people_count,
+			priority: payload.priority,
+		}),
 	});
 }
 
@@ -148,7 +209,7 @@ export function mergeDuplicateRequest(payload: {
 	people: number;
 	location: string;
 	zone: string;
-	source?: 'web' | 'ivr' | 'whatsapp' | 'missed_call' | 'drone';
+	source?: 'web' | 'ivr' | 'whatsapp' | 'sms' | 'missed_call' | 'drone';
 }) {
 	return createRequest(payload);
 }
@@ -160,5 +221,45 @@ export function createBroadcastAlert(payload: {
 	return call<{ success: boolean; message: string; meta: { sentTo: number; channels: string[]; delivery: string }; feed: string }>('/alerts', {
 		method: 'POST',
 		body: JSON.stringify(payload),
+	});
+}
+
+export function getWeather(zone: string) {
+	return call<WeatherData>(`/weather?zone=${encodeURIComponent(zone)}`);
+}
+
+export function getRiskAnalysis(zone: string) {
+	return call<RiskAnalysis>(`/risk-analysis?zone=${encodeURIComponent(zone)}`);
+}
+
+export function getAlertsHistory(limit = 30) {
+	return call<{ items: BroadcastHistoryItem[]; count: number }>(`/alerts/history?limit=${limit}`);
+}
+
+export function sendBroadcast(payload: {
+	zone: string;
+	type: BroadcastMessageType;
+	message: string;
+	channels: Array<'sms' | 'whatsapp' | 'app'>;
+	role?: 'government' | 'ngo';
+	actorId?: string;
+}) {
+	const role = payload.role ?? 'government';
+	return call<{
+		success: boolean;
+		alert: BroadcastHistoryItem;
+		delivery: { zone: string; channels: string[]; counts: Record<string, number> };
+	}>('/broadcast', {
+		method: 'POST',
+		headers: {
+			'x-user-role': role,
+			'x-user-id': payload.actorId ?? 'ngo-console',
+		},
+		body: JSON.stringify({
+			zone: payload.zone,
+			type: payload.type,
+			message: payload.message,
+			channels: payload.channels,
+		}),
 	});
 }

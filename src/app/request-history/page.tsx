@@ -1,8 +1,9 @@
 'use client';
 
 import Link from 'next/link';
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useApp } from '@/lib/store';
+import RequestDetailModal from '@/components/RequestDetailModal';
 
 function statusTone(status: string) {
   if (status === 'completed') return 'bg-green-100 text-green-700';
@@ -18,6 +19,7 @@ function resultLabel(status: string) {
 
 export default function RequestHistoryPage() {
   const { state } = useApp();
+  const [detailRequestId, setDetailRequestId] = useState<string | null>(null);
 
   const requests = useMemo(() => {
     const savedPhone = typeof window !== 'undefined' ? localStorage.getItem('citizen_last_phone') ?? '' : '';
@@ -25,6 +27,11 @@ export default function RequestHistoryPage() {
     const matched = lookupPhone ? state.dashboard.requests.filter((item) => item.phone === lookupPhone) : [];
     return (matched.length > 0 ? matched : state.dashboard.requests).slice(0, 20);
   }, [state.dashboard.requests, state.user.phone]);
+
+  const detailRequest = useMemo(
+    () => (detailRequestId ? state.dashboard.requests.find((req) => req.id === detailRequestId) ?? null : null),
+    [detailRequestId, state.dashboard.requests],
+  );
 
   return (
     <div className="min-h-screen bg-white">
@@ -56,7 +63,11 @@ export default function RequestHistoryPage() {
             </thead>
             <tbody>
               {requests.map((item) => (
-                <tr key={item.id} className="border-b border-slate-100">
+                <tr
+                  key={item.id}
+                  className="border-b border-slate-100 cursor-pointer hover:bg-slate-50"
+                  onClick={() => setDetailRequestId(item.id)}
+                >
                   <td className="py-2 px-2 font-semibold text-slate-700">{item.id}</td>
                   <td className="py-2 px-2 uppercase">{item.category}</td>
                   <td className="py-2 px-2 text-slate-600">{new Date(item.createdAt).toLocaleString()}</td>
@@ -68,7 +79,11 @@ export default function RequestHistoryPage() {
                   </td>
                   <td className="py-2 px-2 text-slate-600">{resultLabel(item.status)}</td>
                   <td className="py-2 px-2">
-                    <Link href={`/request-status?id=${item.id}`} className="text-[#0b3c5d] font-semibold no-underline">
+                    <Link
+                      href={`/request-status?id=${item.id}`}
+                      className="text-[#0b3c5d] font-semibold no-underline"
+                      onClick={(event) => event.stopPropagation()}
+                    >
                       View
                     </Link>
                   </td>
@@ -78,6 +93,11 @@ export default function RequestHistoryPage() {
           </table>
         </section>
       </div>
+      <RequestDetailModal
+        request={detailRequest}
+        isOpen={Boolean(detailRequest)}
+        onClose={() => setDetailRequestId(null)}
+      />
     </div>
   );
 }

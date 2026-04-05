@@ -7,8 +7,30 @@ import { useApp } from '@/lib/store';
 import RequestCard from '@/components/RequestCard';
 import { explainPriority, mergeMessage, priorityLabel } from '@/lib/aiLogic';
 import MissionTimeline from '@/components/MissionTimeline';
+import RequestDetailModal from '@/components/RequestDetailModal';
 
-const MapView = dynamic(() => import('@/components/MapView'), { ssr: false });
+const MapView = dynamic(() => import('../../../components/MapView'), { ssr: false });
+
+function normalizePhone(value: string | null | undefined) {
+  return (value || '').replace(/\D/g, '');
+}
+
+function getVolunteerHintPhone() {
+  if (typeof window === 'undefined') return '';
+
+  const savedPhone = localStorage.getItem('volunteer_phone') || localStorage.getItem('volunteer_last_phone') || '';
+  if (savedPhone) return savedPhone;
+
+  const latestRaw = localStorage.getItem('volunteer_application_latest');
+  if (!latestRaw) return '';
+
+  try {
+    const latest = JSON.parse(latestRaw) as { phone?: string };
+    return latest.phone || '';
+  } catch {
+    return '';
+  }
+}
 
 function distanceKm(a: { lat: number; lng: number }, b: { lat: number; lng: number }) {
   const dx = (a.lat - b.lat) * 111;
@@ -43,12 +65,37 @@ export default function VolunteerDashboardPage() {
   } = useApp();
 
   const [expandedRequestId, setExpandedRequestId] = useState<string>('');
+  const [detailRequestId, setDetailRequestId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState('');
 
   const me = useMemo(
-    () => state.dashboard.volunteers.find((vol) => vol.phone === state.user.phone) ?? state.dashboard.volunteers[0],
-    [state.dashboard.volunteers, state.user.phone],
+    () => {
+      const volunteerList = state.dashboard.volunteers;
+      if (volunteerList.length === 0) return undefined;
+
+      const phoneCandidates = [state.user.phone, getVolunteerHintPhone()]
+        .map((phone) => normalizePhone(phone))
+        .filter(Boolean);
+
+      const byPhone = volunteerList.find((vol) => phoneCandidates.includes(normalizePhone(vol.phone)));
+      if (byPhone) return byPhone;
+
+      const byName = volunteerList.find((vol) => vol.name.trim().toLowerCase() === state.user.name.trim().toLowerCase());
+      if (byName) return byName;
+
+      const withActiveAssignedMission = volunteerList.find((vol) =>
+        state.dashboard.requests.some((req) => req.assignedVolunteerId === vol.id && req.status !== 'completed'),
+      );
+
+      return withActiveAssignedMission ?? volunteerList[0];
+    },
+    [state.dashboard.volunteers, state.dashboard.requests, state.user.phone, state.user.name],
   );
+
+  const mePosition = useMemo(() => ({
+    lat: me?.lat ?? 23.3441,
+    lng: me?.lng ?? 85.3096,
+  }), [me?.lat, me?.lng]);
 
   const assignedMissions = useMemo(
     () => state.dashboard.requests
@@ -62,9 +109,9 @@ export default function VolunteerDashboardPage() {
     () => state.dashboard.requests
       .filter((req) => req.status === 'pending' && !req.assignedVolunteerId)
       .slice()
-      .sort((a, b) => distanceKm(me, a) - distanceKm(me, b))
+      .sort((a, b) => distanceKm(mePosition, a) - distanceKm(mePosition, b))
       .slice(0, 12),
-    [state.dashboard.requests, me],
+    [state.dashboard.requests, mePosition],
   );
 
   const suggested = useMemo(() => {
@@ -72,15 +119,20 @@ export default function VolunteerDashboardPage() {
     return nearbyRequests
       .slice()
       .sort((a, b) => {
-        const scoreA = a.priority - distanceKm(me, a) * 3;
-        const scoreB = b.priority - distanceKm(me, b) * 3;
+        const scoreA = a.priority - distanceKm(mePosition, a) * 3;
+        const scoreB = b.priority - distanceKm(mePosition, b) * 3;
         return scoreB - scoreA;
       })[0];
-  }, [nearbyRequests, me]);
+  }, [nearbyRequests, mePosition]);
 
   const mapRequests = useMemo(
     () => [...assignedMissions, ...nearbyRequests.slice(0, 8)],
     [assignedMissions, nearbyRequests],
+  );
+
+  const detailRequest = useMemo(
+    () => (detailRequestId ? state.dashboard.requests.find((req) => req.id === detailRequestId) ?? null : null),
+    [detailRequestId, state.dashboard.requests],
   );
 
   if (!me) return <div className="max-w-6xl mx-auto px-4 py-10">Loading dashboard...</div>;
@@ -154,7 +206,11 @@ export default function VolunteerDashboardPage() {
                 const missionState = req.executionStatus || 'assigned';
                 const resourceText = req.resourceSummary || 'Resource details not available';
                 return (
-                  <div key={req.id} className="rounded-lg border border-slate-200 p-3 space-y-2 transition-all duration-200 hover:shadow-sm hover:-translate-y-0.5">
+                  <div
+                    key={req.id}
+                    className="rounded-lg border border-slate-200 p-3 space-y-2 transition-all duration-200 hover:shadow-sm hover:-translate-y-0.5 cursor-pointer"
+                    onClick={() => setDetailRequestId(req.id)}
+                  >
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div>
                         <p className="font-semibold text-slate-800">{req.id} - {req.name}</p>
@@ -183,14 +239,20 @@ export default function VolunteerDashboardPage() {
 
                     <div className="flex flex-wrap gap-2">
                       <button
-                        onClick={() => handleStartMission(req.id)}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          void handleStartMission(req.id);
+                        }}
                         disabled={isMutating || missionState === 'on_the_way' || missionState === 'completed'}
                         className="px-3 py-1.5 rounded-md bg-[#0b3c5d] text-white text-xs transition-all duration-150 active:scale-[0.98] disabled:opacity-60"
                       >
                         Start Mission
                       </button>
                       <button
-                        onClick={() => handleCompleteMission(req.id)}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          void handleCompleteMission(req.id);
+                        }}
                         disabled={isMutating || missionState === 'completed'}
                         className="px-3 py-1.5 rounded-md border border-[#0b3c5d] text-[#0b3c5d] text-xs transition-all duration-150 active:scale-[0.98] disabled:opacity-60"
                       >
@@ -234,7 +296,11 @@ export default function VolunteerDashboardPage() {
               const km = distanceKm(me, req).toFixed(1);
               const isExpanded = expandedRequestId === req.id;
               return (
-                <div key={req.id} className="border border-slate-200 rounded-lg p-3 space-y-2 transition-all duration-200 hover:shadow-sm hover:-translate-y-0.5">
+                <div
+                  key={req.id}
+                  className="border border-slate-200 rounded-lg p-3 space-y-2 transition-all duration-200 hover:shadow-sm hover:-translate-y-0.5 cursor-pointer"
+                  onClick={() => setDetailRequestId(req.id)}
+                >
                   <RequestCard request={req} compact={false} />
                   <div className="flex flex-wrap gap-2 text-xs">
                     <span className="px-2 py-1 rounded-full bg-slate-100 text-slate-700">Distance: {km} km</span>
@@ -245,13 +311,19 @@ export default function VolunteerDashboardPage() {
 
                   <div className="flex flex-wrap gap-2">
                     <button
-                      onClick={() => assignRequest(req.id, me.id)}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void assignRequest(req.id, me.id);
+                      }}
                       className="px-3 py-1.5 rounded-md bg-[#0b3c5d] text-white text-xs transition-all duration-150 active:scale-[0.98]"
                     >
                       Accept Mission
                     </button>
                     <button
-                      onClick={() => setExpandedRequestId(isExpanded ? '' : req.id)}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setExpandedRequestId(isExpanded ? '' : req.id);
+                      }}
                       className="px-3 py-1.5 rounded-md border border-slate-300 text-slate-700 text-xs"
                     >
                       View Details
@@ -274,13 +346,18 @@ export default function VolunteerDashboardPage() {
             <h2 className="text-lg font-black text-[#0b3c5d]">Live Mission Map</h2>
             {assignedMissions[0] && (
               <span className="text-xs text-slate-500">
-                Distance: {distanceKm(me, assignedMissions[0]).toFixed(1)} km | ETA: {assignedMissions[0].eta || 'Calculating...'}
+                Distance: {distanceKm(mePosition, assignedMissions[0]).toFixed(1)} km | ETA: {assignedMissions[0].eta || 'Calculating...'}
               </span>
             )}
           </div>
-          <MapView requests={mapRequests} volunteers={[me]} height="430px" showHeatmap showClusters />
+          <MapView requests={mapRequests} volunteers={me ? [me] : []} height="430px" showHeatmap showClusters />
         </section>
       </div>
+      <RequestDetailModal
+        request={detailRequest}
+        isOpen={Boolean(detailRequest)}
+        onClose={() => setDetailRequestId(null)}
+      />
     </div>
   );
 }

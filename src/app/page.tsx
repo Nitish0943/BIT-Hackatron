@@ -5,7 +5,7 @@ import dynamic from 'next/dynamic';
 import { useApp } from '@/lib/store';
 import StatCard from '@/components/StatCard';
 
-const MapView = dynamic(() => import('@/components/MapView'), { ssr: false });
+const MapView = dynamic(() => import('../components/MapView'), { ssr: false });
 
 export default function HomePage() {
   const { state } = useApp();
@@ -29,6 +29,12 @@ export default function HomePage() {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            <Link
+              href="/drone"
+              className="px-4 py-2 rounded-full text-xs font-extrabold bg-linear-to-r from-[#0b4ea2] to-[#d32f2f] text-white no-underline border border-[#0b4ea2] shadow-[0_6px_14px_rgba(11,78,162,0.35)] hover:opacity-95"
+            >
+              Start Drone Survey
+            </Link>
             <Link
               href="/volunteer/apply"
               className="px-4 py-2 rounded-lg text-xs font-semibold bg-[#0b3c5d] text-white no-underline border border-[#0b3c5d] hover:bg-[#07263d]"
@@ -75,6 +81,12 @@ export default function HomePage() {
           </p>
 
           <div className="mt-8 flex flex-col sm:flex-row gap-4 items-start">
+            <Link
+              href="/drone"
+              className="px-8 py-4 rounded-xl bg-[#0b4ea2] hover:bg-[#083a7a] text-white text-base font-bold no-underline shadow-[0_8px_20px_rgba(11,78,162,0.4)]"
+            >
+              Start Drone Survey
+            </Link>
             <Link
               href="/request-help"
               className="px-10 py-5 rounded-xl bg-[#d32f2f] hover:bg-[#b71c1c] text-white text-lg font-bold no-underline shadow-[0_10px_24px_rgba(211,47,47,0.45)] ring-1 ring-[rgba(211,47,47,0.45)]"

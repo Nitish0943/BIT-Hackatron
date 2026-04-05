@@ -6,6 +6,7 @@ import { useApp } from '@/lib/store';
 import { mergeDuplicateRequest } from '@/lib/api';
 import { priorityLabel, suggestNearestVolunteer } from '@/lib/aiLogic';
 import MissionTimeline from '@/components/MissionTimeline';
+import RequestDetailModal from '@/components/RequestDetailModal';
 
 function executionState(status: string, executionStatus?: string) {
   if (status === 'completed' || executionStatus === 'completed') return 'completed';
@@ -20,6 +21,7 @@ export default function GovernmentRequestsPage() {
   const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'assigned' | 'on_the_way' | 'completed'>('all');
   const [zoneFilter, setZoneFilter] = useState<'all' | 'Ranchi' | 'Dhanbad' | 'Jamshedpur'>('all');
   const [processingMergeId, setProcessingMergeId] = useState<string | null>(null);
+  const [detailRequestId, setDetailRequestId] = useState<string | null>(null);
 
   const missionSummary = useMemo(() => {
     const active = state.dashboard.requests.filter((req) => req.status !== 'completed').length;
@@ -38,6 +40,11 @@ export default function GovernmentRequestsPage() {
       return true;
     });
   }, [state.dashboard.requests, priorityFilter, statusFilter, zoneFilter]);
+
+  const detailRequest = useMemo(
+    () => (detailRequestId ? state.dashboard.requests.find((req) => req.id === detailRequestId) ?? null : null),
+    [detailRequestId, state.dashboard.requests],
+  );
 
   const mergeDuplicates = async (requestId: string) => {
     const req = state.dashboard.requests.find((item) => item.id === requestId);
@@ -142,7 +149,11 @@ export default function GovernmentRequestsPage() {
                   const assigning = isAssigningRequest(req.id);
                   const stage = executionState(req.status, req.executionStatus);
                   return (
-                    <tr key={req.id} className="border-t border-slate-200 align-top hover:bg-slate-50/70 transition-colors duration-200">
+                    <tr
+                      key={req.id}
+                      className="border-t border-slate-200 align-top hover:bg-slate-50/70 transition-colors duration-200 cursor-pointer"
+                      onClick={() => setDetailRequestId(req.id)}
+                    >
                       <td className="px-3 py-2 font-semibold text-slate-800">{req.id}</td>
                       <td className="px-3 py-2">{req.name}</td>
                       <td className="px-3 py-2">{req.people}</td>
@@ -171,21 +182,30 @@ export default function GovernmentRequestsPage() {
                       <td className="px-3 py-2">
                         <div className="flex flex-wrap gap-2">
                           <button
-                            onClick={() => assignSmart(req.id)}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              void assignSmart(req.id);
+                            }}
                             disabled={assigning || req.status !== 'pending'}
                             className="px-2 py-1 rounded-md bg-[#0b3c5d] text-white text-xs disabled:opacity-50 disabled:cursor-not-allowed"
                           >
                             {assigning ? 'Assigning...' : 'Assign'}
                           </button>
                           <button
-                            onClick={() => changePriority(req.id, req.priority + 5)}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              void changePriority(req.id, req.priority + 5);
+                            }}
                             disabled={isMutating}
                             className="px-2 py-1 rounded-md border border-amber-600 text-amber-700 text-xs disabled:opacity-50"
                           >
                             Increase Priority
                           </button>
                           <button
-                            onClick={() => mergeDuplicates(req.id)}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              void mergeDuplicates(req.id);
+                            }}
                             disabled={processingMergeId === req.id}
                             className="px-2 py-1 rounded-md border border-[#0b3c5d] text-[#0b3c5d] text-xs disabled:opacity-50"
                           >
@@ -209,6 +229,11 @@ export default function GovernmentRequestsPage() {
           </div>
         </div>
       </div>
+      <RequestDetailModal
+        request={detailRequest}
+        isOpen={Boolean(detailRequest)}
+        onClose={() => setDetailRequestId(null)}
+      />
     </div>
   );
 }

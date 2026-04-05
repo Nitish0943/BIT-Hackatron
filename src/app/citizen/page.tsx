@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import Image from 'next/image';
 import { useApp } from '@/lib/store';
 import MissionTimeline from '@/components/MissionTimeline';
+import RequestDetailModal from '@/components/RequestDetailModal';
 
 const MapView = dynamic(() => import('@/components/MapView'), { ssr: false });
 
@@ -57,6 +58,7 @@ export default function CitizenPortalPage() {
   const [familySize, setFamilySize] = useState(3);
   const [sendingCategory, setSendingCategory] = useState<string>('');
   const [notice, setNotice] = useState('');
+  const [detailRequestId, setDetailRequestId] = useState<string | null>(null);
   const [savedPhone] = useState(() => (typeof window !== 'undefined' ? localStorage.getItem('citizen_last_phone') || '' : ''));
   const [now, setNow] = useState(() => Date.now());
 
@@ -108,6 +110,12 @@ export default function CitizenPortalPage() {
   }, [myRequests, now]);
 
   const latest = myRequests[0] || null;
+  const detailRequest = useMemo(
+    () => (detailRequestId ? state.dashboard.requests.find((request) => request.id === detailRequestId) ?? null : null),
+    [detailRequestId, state.dashboard.requests],
+  );
+  const historyRequestMap = useMemo(() => new Map(myRequests.map((request) => [request.id, request])), [myRequests]);
+
   const assignedVolunteer = latest?.assignedVolunteerId
     ? state.dashboard.volunteers.find((v) => v.id === latest.assignedVolunteerId) || null
     : null;
@@ -251,6 +259,12 @@ export default function CitizenPortalPage() {
                   status={latest.status}
                   executionStatus={latest.executionStatus}
                 />
+                <button
+                  onClick={() => setDetailRequestId(latest.id)}
+                  className="mt-2 rounded-lg border border-[#0b3c5d] px-3 py-1.5 text-xs font-semibold text-[#0b3c5d] hover:bg-[#f2f7fd]"
+                >
+                  Open Full Details
+                </button>
               </>
             ) : (
               <div className="text-sm text-slate-500">No live request yet. Press NEED HELP to start emergency workflow.</div>
@@ -295,7 +309,15 @@ export default function CitizenPortalPage() {
           <h2 className="text-xl font-black text-[#0b3c5d]">Request History</h2>
           <div className="mt-3 space-y-2">
             {historyRows.map((item) => (
-              <div key={item.id} className="flex items-center justify-between rounded-xl border border-slate-200 px-3 py-2 text-sm">
+              <div
+                key={item.id}
+                className="flex items-center justify-between rounded-xl border border-slate-200 px-3 py-2 text-sm cursor-pointer hover:bg-slate-50"
+                onClick={() => {
+                  if (historyRequestMap.has(item.id)) {
+                    setDetailRequestId(item.id);
+                  }
+                }}
+              >
                 <div className="font-semibold text-slate-700">{item.category.toUpperCase()} - <span className="font-normal">{item.text}</span></div>
                 <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${statusTone(item.status)}`}>{item.status.toUpperCase()}</span>
               </div>
@@ -303,6 +325,11 @@ export default function CitizenPortalPage() {
           </div>
         </section>
       </div>
+      <RequestDetailModal
+        request={detailRequest}
+        isOpen={Boolean(detailRequest)}
+        onClose={() => setDetailRequestId(null)}
+      />
     </div>
   );
 }

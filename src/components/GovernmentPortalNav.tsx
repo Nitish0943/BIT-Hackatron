@@ -6,6 +6,7 @@ import { useApp } from '@/lib/store';
 
 const LINKS = [
   { href: '/government', label: 'Command Dashboard' },
+  { href: '/command-center', label: 'Disaster Command Center' },
   { href: '/government/requests', label: 'Request Management' },
   { href: '/government/inventory', label: 'Inventory Management' },
   { href: '/government/volunteers', label: 'Volunteer Management' },

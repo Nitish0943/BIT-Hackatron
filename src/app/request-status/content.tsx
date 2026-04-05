@@ -10,6 +10,7 @@ import Image from 'next/image';
 import { REQUEST_CATEGORY_LABELS, explainPriority, mergeMessage, priorityLabel, resourceEstimate } from '@/lib/aiLogic';
 import { useApp } from '@/lib/store';
 import MissionTimeline from '@/components/MissionTimeline';
+import RequestDetailModal from '@/components/RequestDetailModal';
 
 const MapView = dynamic(() => import('@/components/MapView'), { ssr: false });
 
@@ -19,6 +20,7 @@ export default function RequestStatusContent() {
   const [query, setQuery] = useState(searchParams?.get('id') ?? '');
   const [searched, setSearched] = useState(false);
   const [result, setResult] = useState<HelpRequest | null>(null);
+  const [showDetailModal, setShowDetailModal] = useState(false);
   const [loading, setLoading] = useState(false);
 
   const statusTone = (status: string) => {
@@ -106,7 +108,15 @@ export default function RequestStatusContent() {
       {searched && result && (
         <div className="grid lg:grid-cols-3 gap-4">
           <div className="lg:col-span-2 space-y-3">
-            <RequestCard request={result} compact={false} />
+            <div className="cursor-pointer" onClick={() => setShowDetailModal(true)}>
+              <RequestCard request={result} compact={false} />
+            </div>
+            <button
+              onClick={() => setShowDetailModal(true)}
+              className="rounded-xl border border-[#0b3c5d] px-4 py-2 text-sm font-semibold text-[#0b3c5d] hover:bg-[#f2f7fd]"
+            >
+              Open Full Request Intelligence
+            </button>
 
             <div className="rounded-2xl border border-slate-200 shadow-sm bg-white p-5 space-y-3 text-sm text-slate-700">
               <h2 className="text-xl font-black text-[#0b3c5d]">Live Status</h2>
@@ -169,6 +179,11 @@ export default function RequestStatusContent() {
           </div>
         </div>
       )}
+      <RequestDetailModal
+        request={result}
+        isOpen={showDetailModal && Boolean(result)}
+        onClose={() => setShowDetailModal(false)}
+      />
     </div>
   );
 }
