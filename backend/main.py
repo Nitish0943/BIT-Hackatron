@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import datetime, timezone
 from math import ceil
+from pathlib import Path
+from urllib.parse import parse_qs
 from typing import Any, Literal, Optional
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 
@@ -135,10 +139,41 @@ dashboard_cache_compact: dict[str, Any] = {}
 dashboard_cache_updated_at = ""
 duplicate_request_index: dict[str, str] = {}
 cache_refresh_task: asyncio.Task[None] | None = None
+WHATSAPP_DATA_FILE = Path(__file__).with_name("whatsapp_requests.json")
+FRONTEND_HTML_FILE = Path(__file__).with_name("frontend.html")
 
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def load_whatsapp_data() -> list[dict[str, Any]]:
+    if not WHATSAPP_DATA_FILE.exists():
+        WHATSAPP_DATA_FILE.write_text("[]", encoding="utf-8")
+
+    try:
+        content = WHATSAPP_DATA_FILE.read_text(encoding="utf-8").strip()
+        data = json.loads(content) if content else []
+        return data if isinstance(data, list) else []
+    except (OSError, json.JSONDecodeError):
+        return []
+
+
+def save_whatsapp_data(records: list[dict[str, Any]]) -> None:
+    WHATSAPP_DATA_FILE.write_text(json.dumps(records, indent=2), encoding="utf-8")
+
+
+def append_whatsapp_request(phone: str, request_type: str) -> dict[str, str]:
+    record = {"phone": phone, "type": request_type, "time": now_iso()}
+    records = load_whatsapp_data()
+    records.insert(0, record)
+    save_whatsapp_data(records)
+    return record
+
+
+def twilio_response(message: str) -> str:
+    escaped = message.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return f'<?xml version="1.0" encoding="UTF-8"?><Response><Message>{escaped}</Message></Response>'
 
 
 def normalize_location(value: str) -> str:
@@ -638,8 +673,13 @@ async def shutdown_event() -> None:
 
 
 @app.get("/")
-async def root() -> dict[str, Any]:
-    return {"service": "SahayakNet API", "status": "ok"}
+async def root() -> FileResponse:
+    return FileResponse(FRONTEND_HTML_FILE)
+
+
+@app.get("/data")
+async def get_data() -> list[dict[str, Any]]:
+    return load_whatsapp_data()
 
 
 @app.post("/request")
@@ -856,44 +896,48 @@ async def ivr_create(payload: IVRIn, background_tasks: BackgroundTasks):
 
 
 @app.post("/whatsapp")
-async def whatsapp_create(payload: WhatsAppIn, background_tasks: BackgroundTasks):
-    text = payload.message.lower()
-    category: RequestCategory = "food"
-    if any(token in text for token in ["baby", "infant", "diaper", "milk"]):
-        category = "baby_care"
-    elif any(token in text for token in ["women", "woman", "sanitary", "pad", "hygiene"]):
-        category = "women_care"
-    elif any(token in text for token in ["water", "drink", "hydration"]):
-        category = "water"
-    elif any(token in text for token in ["medical", "doctor", "medicine", "hospital"]):
-        category = "medical"
-    elif any(token in text for token in ["rescue", "trapped", "stuck", "help"]):
-        category = "rescue"
-    elif any(token in text for token in ["shelter", "house", "roof", "camp"]):
-        category = "shelter"
-    elif any(token in text for token in ["emergency", "urgent", "essential", "power", "torch"]):
-        category = "emergency_help"
+async def whatsapp_create(request: Request):
+    content_type = request.headers.get("content-type", "")
+    phone = ""
+    body = ""
 
-    number = 1
-    for token in payload.message.split():
-        if token.isdigit():
-            number = max(1, min(20, int(token)))
-            break
+    if "application/json" in content_type:
+        payload = await request.json()
+        phone = str(payload.get("From", "")).strip()
+        body = str(payload.get("Body", "")).strip()
+    else:
+        raw = (await request.body()).decode("utf-8", errors="ignore")
+        form = parse_qs(raw)
+        phone = form.get("From", [""])[0].strip()
+        body = form.get("Body", [""])[0].strip()
 
-    zone = payload.zone or "Jamshedpur"
-    location = payload.location or f"{zone} WhatsApp Input"
-    request = build_request(
-        name="WhatsApp User",
-        phone=payload.phone,
-        category=category,
-        family_size=number,
-        location=location,
-        zone=zone,
-        source="whatsapp",
-    )
-    background_tasks.add_task(apply_request_post_processing, request["id"])
-    schedule_cache_refresh(background_tasks)
-    return request
+    choice_map = {
+        "1": "Medical",
+        "2": "Food",
+        "3": "Rescue",
+        "4": "Water & Shelter",
+    }
+
+    selected_type = choice_map.get(body)
+    if selected_type and phone:
+        append_whatsapp_request(phone, selected_type)
+        reply_text = f"Your request for {selected_type} has been received. Our team will contact you soon."
+    else:
+        reply_text = (
+            "Namaste / Hello\n"
+            "Please choose a service:\n"
+            "1 Medical Help\n"
+            "2 Food Support\n"
+            "3 Rescue\n"
+            "4 Water & Shelter\n\n"
+            "कृपया सेवा चुनें:\n"
+            "1 चिकित्सा\n"
+            "2 भोजन\n"
+            "3 बचाव\n"
+            "4 पानी"
+        )
+
+    return Response(content=twilio_response(reply_text), media_type="application/xml")
 
 
 @app.post("/missed-call")
