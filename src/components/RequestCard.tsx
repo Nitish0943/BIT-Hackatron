@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import Image from 'next/image';
 import { HelpRequest } from '@/lib/mockData';
 import { Clock, MapPin, Route, User } from 'lucide-react';
 import { explainPriority, mergeMessage, priorityLabel, resourceEstimate } from '@/lib/aiLogic';
@@ -41,6 +42,12 @@ export default function RequestCard({ request, onAssign, assigning = false, comp
   const urgency = priorityLabel(request.priority);
   const mergeNote = mergeMessage(request);
   const source = request.source ? request.source.replace('_', ' ').toUpperCase() : 'WEB';
+  const dronePeople = request.droneMeta?.peopleCount ?? request.peopleCount ?? request.people;
+  const droneRisk = request.droneMeta?.riskLevel ?? request.riskLevel;
+  const droneImage = request.droneMeta?.image ?? request.droneImage;
+  const droneImageUrl = droneImage
+    ? (droneImage.startsWith('http') ? droneImage : `http://localhost:8000${droneImage}`)
+    : '';
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 60_000);
@@ -79,6 +86,24 @@ export default function RequestCard({ request, onAssign, assigning = false, comp
               </div>
             </div>
             <div className="mt-2 text-xs text-gray-500 truncate flex items-center gap-1"><MapPin size={12} />{request.location}</div>
+            {request.source === 'drone' && (
+              <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 p-2">
+                <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-700 font-semibold">
+                  <span className="px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">People: {dronePeople}</span>
+                  {droneRisk && <span className="px-2 py-0.5 rounded-full bg-red-100 text-red-700">Risk: {droneRisk}</span>}
+                </div>
+                {droneImageUrl && (
+                  <Image
+                    src={droneImageUrl}
+                    alt="Drone capture"
+                    width={640}
+                    height={160}
+                    unoptimized
+                    className="mt-2 h-20 w-full object-cover rounded-md border border-slate-200"
+                  />
+                )}
+              </div>
+            )}
             <div className="mt-2 flex flex-wrap items-center gap-2">
               <span className="text-[11px] bg-slate-100 text-slate-700 px-2 py-0.5 rounded-full">{CAT_LABELS[request.category] || request.category}</span>
               <span className="text-[11px] bg-slate-100 text-slate-700 px-2 py-0.5 rounded-full">Zone: {request.zone}</span>

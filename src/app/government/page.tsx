@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { useApp } from '@/lib/store';
 import {
@@ -17,6 +17,7 @@ import StatCard from '@/components/StatCard';
 import ResourceGauge from '@/components/ResourceGauge';
 import RequestCard from '@/components/RequestCard';
 import GovernmentPortalNav from '@/components/GovernmentPortalNav';
+import RequestDetailModal from '@/components/RequestDetailModal';
 
 const MapView = dynamic(() => import('@/components/MapView'), { ssr: false });
 
@@ -24,7 +25,10 @@ export default function GovernmentPage() {
   const { state, assignRequest, changePriority, broadcastAlert, isAssigningRequest } = useApp();
   const [alertText, setAlertText] = useState('');
   const [focusedRequestId, setFocusedRequestId] = useState<string | null>(null);
+  const [detailRequestId, setDetailRequestId] = useState<string | null>(null);
   const [lastDelivery, setLastDelivery] = useState<string>('');
+  const [ivrToast, setIvrToast] = useState('');
+  const seenIvrRequestIdsRef = useRef<Set<string>>(new Set());
 
   const activeRequests = useMemo(
     () => state.dashboard.requests
@@ -33,6 +37,20 @@ export default function GovernmentPage() {
       .sort((a, b) => b.priority - a.priority),
     [state.dashboard.requests],
   );
+
+  useEffect(() => {
+    const ivrRequests = state.dashboard.requests.filter((req) => req.source === 'ivr');
+    const seen = seenIvrRequestIdsRef.current;
+
+    const fresh = ivrRequests.filter((req) => !seen.has(req.id));
+    ivrRequests.forEach((req) => seen.add(req.id));
+
+    if (fresh.length > 0) {
+      setIvrToast('📞 New IVR request received');
+      const timer = window.setTimeout(() => setIvrToast(''), 2600);
+      return () => window.clearTimeout(timer);
+    }
+  }, [state.dashboard.requests]);
 
   const forecasts = useMemo(() => predictDepletion(state.dashboard.resources), [state.dashboard.resources]);
   const required = useMemo(
@@ -47,6 +65,11 @@ export default function GovernmentPage() {
     }
     return activeRequests[0] ?? null;
   }, [activeRequests, focusedRequestId]);
+
+  const detailRequest = useMemo(
+    () => (detailRequestId ? state.dashboard.requests.find((req) => req.id === detailRequestId) ?? null : null),
+    [detailRequestId, state.dashboard.requests],
+  );
 
   const foodDemandPrediction = useMemo(
     () => predictDemand(state.dashboard.requests, 'food', 3),
@@ -72,6 +95,11 @@ export default function GovernmentPage() {
     <div className="min-h-screen bg-white text-slate-700">
       <div className="max-w-7xl mx-auto px-4 py-6 space-y-4">
         <section className="space-y-3">
+          {ivrToast && (
+            <div className="rounded-xl border border-violet-200 bg-violet-50 px-4 py-2 text-sm font-semibold text-violet-700">
+              {ivrToast}
+            </div>
+          )}
           <div className="rounded-xl border border-slate-200 bg-[#f8fafc] p-4">
             <div className="flex flex-wrap items-start justify-between gap-4">
               <div>
@@ -118,7 +146,15 @@ export default function GovernmentPage() {
               </div>
               <div className="space-y-3 mt-3">
                 {activeRequests.slice(0, 6).map((req) => (
-                  <div key={req.id} className={`space-y-2 p-2 rounded-lg border ${focusedRequest?.id === req.id ? 'border-[#0b3c5d] bg-[#eef4fb]' : 'border-transparent'}`} onMouseEnter={() => setFocusedRequestId(req.id)} onClick={() => setFocusedRequestId(req.id)}>
+                  <div
+                    key={req.id}
+                    className={`space-y-2 p-2 rounded-lg border cursor-pointer ${focusedRequest?.id === req.id ? 'border-[#0b3c5d] bg-[#eef4fb]' : 'border-transparent'}`}
+                    onMouseEnter={() => setFocusedRequestId(req.id)}
+                    onClick={() => {
+                      setFocusedRequestId(req.id);
+                      setDetailRequestId(req.id);
+                    }}
+                  >
                     <RequestCard request={req} />
                     <div className="flex flex-wrap gap-2 text-xs">
                       <span className={`px-2 py-1 rounded-full ${priorityLabel(req.priority) === 'Critical' ? 'bg-red-50 text-red-700' : 'bg-amber-50 text-amber-700'}`}>{priorityLabel(req.priority)}</span>
@@ -127,13 +163,24 @@ export default function GovernmentPage() {
                     </div>
                     <div className="flex gap-2">
                       <button
-                        onClick={() => assignNearest(req.id)}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          void assignNearest(req.id);
+                        }}
                         disabled={isAssigningRequest(req.id)}
                         className="flex-1 px-2 py-1.5 rounded-md bg-[#0b3c5d] text-white text-xs disabled:opacity-60 disabled:cursor-not-allowed"
                       >
                         {isAssigningRequest(req.id) ? 'Assigning...' : 'Assign Volunteer'}
                       </button>
-                      <button onClick={() => changePriority(req.id, req.priority + 5)} className="flex-1 px-2 py-1.5 rounded-md border border-amber-600 text-amber-700 text-xs">Increase Priority</button>
+                      <button
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          void changePriority(req.id, req.priority + 5);
+                        }}
+                        className="flex-1 px-2 py-1.5 rounded-md border border-amber-600 text-amber-700 text-xs"
+                      >
+                        Increase Priority
+                      </button>
                     </div>
                   </div>
                 ))}
@@ -230,6 +277,11 @@ export default function GovernmentPage() {
           </div>
         </section>
       </div>
+      <RequestDetailModal
+        request={detailRequest}
+        isOpen={Boolean(detailRequest)}
+        onClose={() => setDetailRequestId(null)}
+      />
     </div>
   );
 }
